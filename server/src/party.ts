@@ -184,6 +184,9 @@ function objectName(token: string | undefined): string | null {
 function speakerPerson(text: string): string | null {
   const named = namedCounterparty(text)
   if (named && !PRODUCTS.has(named.toLowerCase())) return named
+  const promised = text.match(new RegExp(`${EDGE}i\\s+promised\\s+(\\p{L}[\\p{L}'’-]*)`, 'iu'))
+  const fromPromise = objectName(promised?.[1])
+  if (fromPromise) return fromPromise
   const match = text.match(
     new RegExp(
       `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)\\s+(?:pay\\s+back|call|pay|remind|send|tell|email|text|message|ping|meet)\\s+(\\p{L}[\\p{L}'’-]*)`,
@@ -265,6 +268,30 @@ export function speakerPromises(text: string): boolean {
   return SPEAKER_OWES.test(text) || EXTRA_SPEAKER.test(text) || japaneseSpeakerPromise(text)
 }
 
+const ACTION = 'pay\\s+back|send|pay|call|remind|return|email|text|message|deliver|share|finish|submit'
+
+/**
+ * True only for a real owed promise or an I'll plus an action verb.
+ * "I'll think about it" is not enough to override the model.
+ */
+export function forcesCommitment(text: string): boolean {
+  const speakerAt = speakerLeadIndex(text)
+  const owed = firstOwed(text)
+  if (owed && (speakerAt < 0 || owed.index < speakerAt)) {
+    const tail = text.slice(owed.index)
+    const owedAction = new RegExp(
+      `^${PROPER}\\s+(?:will\\s+(?:${ACTION})|(?:promised\\s+to|is\\s+going\\s+to)\\s+(?:${ACTION}))${END}`,
+      'u',
+    )
+    if (owedAction.test(tail)) return true
+  }
+  const speakerAction = new RegExp(
+    `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)\\s+(?:${ACTION})${END}`,
+    'iu',
+  )
+  return speakerAction.test(text)
+}
+
 /**
  * Locked means the utterance itself decides the party, so a model guess cannot
  * invent a person or a direction for these shapes.
@@ -276,7 +303,7 @@ export function inferParty(text: string): { person: string | null; direction: Di
     return { person: owed.person, direction: 'Owed to me', locked: true }
   }
   if (speakerAt >= 0 || SPEAKER_OWES.test(text)) {
-    if (/\bmy own\b/i.test(text) && !namedCounterparty(text)) {
+    if (/\b(?:my own|myself)\b/i.test(text) && !namedCounterparty(text)) {
       return { person: null, direction: null, locked: true }
     }
     return { person: speakerAt >= 0 ? speakerPerson(text) : namedCounterparty(text), direction: 'I owe', locked: true }

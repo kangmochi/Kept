@@ -1,5 +1,5 @@
 import { dueLabel, hasDateCue, isValidISO, resolveDue, zonedISO } from './dates.js'
-import { cleanDirection, cleanPerson, inferParty, listenerAsk, speakerPromises } from './party.js'
+import { cleanDirection, cleanPerson, forcesCommitment, inferParty, listenerAsk, speakerPromises } from './party.js'
 import type { Direction, Extraction } from './types.js'
 
 export interface LlmClient {
@@ -140,13 +140,20 @@ export function indonesianLeak(title: string, utterance = ''): boolean {
   return false
 }
 
-const SUBJECT_LEAD = /^(?:i'll|i will|i'm going to|im going to|i promised(?:\s+to)?)\s+/i
-const NAME_LEAD = /^(?:\p{Lu}[\p{L}'’-]{0,40}\s+)(?:promised\s+to|is\s+going\s+to|will)\s+/u
+const SUBJECT_LEAD = /^(?:i'll|i will|i'm going to|im going to|i promised(?:\s+to)?)(?:\s+|$)/i
+const NAME_LEAD =
+  /^(?:\p{Lu}[\p{L}'’-]{0,40}\s+)(?:and\s+\p{Lu}[\p{L}'’-]{0,40}\s+)?(?:promised\s+to|is\s+going\s+to|will)(?:\s+|$)/u
+
+function bareLead(raw: string): string {
+  return stripDateWords(raw)
+    .replace(/[.!?]+$/g, '')
+    .trim()
+}
 
 function stripSubjectLead(raw: string): string {
-  let line = stripDateWords(raw)
+  let line = bareLead(raw)
   for (let i = 0; i < 4; i += 1) {
-    const next = stripDateWords(line.replace(SUBJECT_LEAD, '').replace(NAME_LEAD, '')).trim()
+    const next = bareLead(line.replace(SUBJECT_LEAD, '').replace(NAME_LEAD, ''))
     if (next === line) break
     line = next
   }
@@ -154,7 +161,7 @@ function stripSubjectLead(raw: string): string {
 }
 
 function hadSubjectLead(raw: string): boolean {
-  const line = stripDateWords(raw).trim()
+  const line = bareLead(raw)
   return SUBJECT_LEAD.test(line) || NAME_LEAD.test(line)
 }
 
@@ -162,7 +169,7 @@ function hadSubjectLead(raw: string): boolean {
 export function englishPromiseTitle(text: string): string {
   const line = stripSubjectLead(normalizeUtterance(text))
   const title = sanitizeTitle(line)
-  if (!title) return 'Promise'
+  if (!title) return ''
   return title.charAt(0).toUpperCase() + title.slice(1)
 }
 
@@ -170,7 +177,7 @@ export function englishPromiseTitle(text: string): string {
 export function presentEnglishTitle(raw: string, utterance: string): string {
   if (!hadSubjectLead(raw)) return cleanTitle(raw, utterance)
   const title = sanitizeTitle(stripSubjectLead(raw))
-  if (!title) return cleanTitle(raw, utterance)
+  if (!title) return ''
   return title.charAt(0).toUpperCase() + title.slice(1)
 }
 
@@ -413,7 +420,7 @@ export async function extractCommitment(
   }
   const owed = ask === 'owed' && !speakerPromises(utterance)
   const party = inferParty(utterance)
-  const forced = party.locked && (party.direction === 'I owe' || party.direction === 'Owed to me')
+  const forced = forcesCommitment(utterance)
   if (!model.isCommitment && !owed && !forced) {
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
@@ -422,8 +429,11 @@ export async function extractCommitment(
   const usedPromiseSentence = sourceUtterance !== utterance
   if (looksEnglish(utterance) && indonesianLeak(title, utterance)) {
     title = await recoverEnglishTitle(sourceUtterance, llm, now, timeZone)
-  } else if (looksEnglish(utterance) && !usedPromiseSentence) {
+  } else if (!usedPromiseSentence && (looksEnglish(utterance) || hadSubjectLead(sourceTitle))) {
     title = presentEnglishTitle(sourceTitle, sourceUtterance)
+  }
+  if (!title || (hadSubjectLead(sourceTitle) && !sanitizeTitle(stripSubjectLead(sourceTitle)))) {
+    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
   const today = zonedISO(now, timeZone)
   const localDue = resolveDue(utterance, now, timeZone)

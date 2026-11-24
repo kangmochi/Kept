@@ -836,6 +836,101 @@ test('english party rules ignore ordinary words and products', async () => {
   }
 })
 
+test('a bare I will is not forced into a promise', async () => {
+  for (const line of ["I'll think about it", "I'll let you know", "Maybe I'll go to the gym", "I'll be late tomorrow"]) {
+    const result = await extractCommitment(
+      line,
+      fake({ isCommitment: false, title: 'Think about it', dueISO: '2026-11-25', confidence: 0.9, direction: 'I owe' }),
+      TUESDAY,
+    )
+    assert.equal(result.isCommitment, false, line)
+    assert.equal(result.title, null, line)
+    assert.equal(result.dueISO, null, line)
+    assert.equal(result.person, null, line)
+    assert.equal(result.direction, null, line)
+  }
+
+  const call = await extractCommitment(
+    "I'll call Nadia tomorrow",
+    fake({ isCommitment: false, title: "I'll call Nadia tomorrow", dueISO: null, confidence: 0.9, person: null, direction: null }),
+    TUESDAY,
+  )
+  assert.equal(call.isCommitment, true)
+  assert.equal(call.title, 'Call Nadia')
+  assert.equal(call.person, 'Nadia')
+  assert.equal(call.direction, 'I owe')
+  assert.equal(call.dueISO, '2026-11-25')
+
+  const invoice = await extractCommitment(
+    "I'll send the invoice to Nadia by Friday",
+    fake({ isCommitment: false, title: "I'll send the invoice to Nadia by Friday", dueISO: null, confidence: 0.9, person: null, direction: null }),
+    TUESDAY,
+  )
+  assert.equal(invoice.isCommitment, true)
+  assert.equal(invoice.title, 'Send the invoice to Nadia')
+  assert.equal(invoice.person, 'Nadia')
+  assert.equal(invoice.direction, 'I owe')
+  assert.equal(invoice.dueISO, '2026-11-27')
+
+  const samples = await extractCommitment(
+    'Alex will send the samples by Friday',
+    fake({ isCommitment: false, title: 'Alex will send the samples by Friday', dueISO: null, confidence: 0.9, person: null, direction: null }),
+    TUESDAY,
+  )
+  assert.equal(samples.isCommitment, true)
+  assert.equal(samples.title, 'Send the samples')
+  assert.equal(samples.person, 'Alex')
+  assert.equal(samples.direction, 'Owed to me')
+  assert.equal(samples.dueISO, '2026-11-27')
+
+  const laptop = await extractCommitment(
+    'Alex promised to return the laptop by Friday',
+    fake({ isCommitment: false, title: 'Alex promised to return the laptop by Friday', dueISO: null, confidence: 0.9, person: null, direction: null }),
+    TUESDAY,
+  )
+  assert.equal(laptop.isCommitment, true)
+  assert.equal(laptop.title, 'Return the laptop')
+  assert.equal(laptop.person, 'Alex')
+  assert.equal(laptop.direction, 'Owed to me')
+  assert.equal(laptop.dueISO, '2026-11-27')
+
+  const promised = await extractCommitment(
+    "I promised Alex I'd send the deck",
+    fake({ isCommitment: true, title: 'Send the deck', dueISO: null, confidence: 0.9, person: null, direction: null }),
+    TUESDAY,
+  )
+  assert.equal(promised.person, 'Alex')
+  assert.equal(promised.direction, 'I owe')
+  assert.equal(promised.title, 'Send the deck')
+
+  const myself = await extractCommitment(
+    "I'll remind myself",
+    fake({ isCommitment: true, title: "I'll remind myself", dueISO: null, confidence: 0.9, person: 'Myself', direction: 'I owe' }),
+    TUESDAY,
+  )
+  assert.equal(myself.person, null)
+  assert.equal(myself.direction, null)
+  assert.equal(myself.title, 'Remind myself')
+
+  const pair = await extractCommitment(
+    'Sarah and Alex will send it',
+    fake({ isCommitment: true, title: 'Sarah and Alex will send it', dueISO: null, confidence: 0.9, person: null, direction: null }),
+    TUESDAY,
+  )
+  assert.equal(pair.isCommitment, true)
+  assert.equal(pair.title, 'Send it')
+
+  for (const line of ['Alex will.', "I'll."]) {
+    const empty = await extractCommitment(
+      line,
+      fake({ isCommitment: true, title: line, dueISO: null, confidence: 0.9, direction: 'I owe' }),
+      TUESDAY,
+    )
+    assert.equal(empty.isCommitment, false, line)
+    assert.equal(empty.title, null, line)
+  }
+})
+
 test('empty text is a safe error and does not call the model', async () => {
   const calls: string[] = []
   await assert.rejects(
