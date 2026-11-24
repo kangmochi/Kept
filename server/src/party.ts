@@ -54,9 +54,11 @@ const EDGE = String.raw`(?<![\p{L}\p{N}_])`
 const END = String.raw`(?![\p{L}\p{N}_])`
 
 const PROPER = String.raw`\p{Lu}[\p{L}'’-]{0,40}`
+const PROMISE_VERBS =
+  'pay\\s+back|settle|refund|cover|bring|fix|sign|share|finish|submit|email|text|message|prepare|write|check|book|buy|send|pay|call|review|deliver|return|remind|kirim|bayar'
 const OWED = [
   new RegExp(`${EDGE}(${PROPER})\\s+said\\s+(?:he|she|they)'?ll\\b`, 'giu'),
-  new RegExp(`${EDGE}(${PROPER})\\s+will\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar)${END}`, 'giu'),
+  new RegExp(`${EDGE}(${PROPER})\\s+will\\s+(?:${PROMISE_VERBS})${END}`, 'giu'),
   // No i flag: the name has to be capitalised, so "the meeting is going to" is not a person.
   new RegExp(`${EDGE}(${PROPER})\\s+(?:promised\\s+to|is\\s+going\\s+to)\\s+`, 'gu'),
   new RegExp(`${EDGE}(${PROPER})\\s+(?:bilang|berkata)${END}`, 'giu'),
@@ -73,6 +75,7 @@ const VERB = new RegExp(
 )
 const ASK_SRC = [
   `${EDGE}(?:maybe\\s+you\\s+could|could\\s+you|can\\s+you|would\\s+you|you\\s+could)${END}`,
+  `${EDGE}(?:if\\s+)?i\\s+ask\\s+you${END}`,
   `${EDGE}(?:bisa\\s+tolong|kamu\\s+bisa|boleh\\s+kirim)${END}`,
   `${EDGE}k[oö]nntest\\s+du${END}`,
   `${EDGE}tu\\s+pourra(?:is|s)${END}`,
@@ -209,7 +212,7 @@ function firstOwed(text: string): { person: string; index: number } | null {
       const raw = match[1]
       if (!raw || !/^\p{Lu}/u.test(raw)) continue
       const person = cleanPerson(raw)
-      if (!person) continue
+      if (!person || PRODUCTS.has(person.toLowerCase())) continue
       const index = match.index ?? 0
       if (!best || index < best.index) best = { person, index }
     }
@@ -268,16 +271,22 @@ export function speakerPromises(text: string): boolean {
   return SPEAKER_OWES.test(text) || EXTRA_SPEAKER.test(text) || japaneseSpeakerPromise(text)
 }
 
-const ACTION = 'pay\\s+back|send|pay|call|remind|return|email|text|message|deliver|share|finish|submit'
+const ACTION = 'pay\\s+back|settle|refund|send|pay|call|remind|return|email|text|message|deliver'
+const HEDGE = /\b(?:maybe|perhaps|if|might|probably)\b/i
+
+function hedgedBefore(text: string, subjectAt: number): boolean {
+  if (subjectAt <= 0) return false
+  return HEDGE.test(text.slice(0, subjectAt))
+}
 
 /**
- * True only for a real owed promise or an I'll plus an action verb.
- * "I'll think about it" is not enough to override the model.
+ * True only for a real owed promise or an I'll plus a strong action verb.
+ * Casual verbs, and a hedge before the subject, do not override the model.
  */
 export function forcesCommitment(text: string): boolean {
   const speakerAt = speakerLeadIndex(text)
   const owed = firstOwed(text)
-  if (owed && (speakerAt < 0 || owed.index < speakerAt)) {
+  if (owed && (speakerAt < 0 || owed.index < speakerAt) && !hedgedBefore(text, owed.index)) {
     const tail = text.slice(owed.index)
     const owedAction = new RegExp(
       `^${PROPER}\\s+(?:will\\s+(?:${ACTION})|(?:promised\\s+to|is\\s+going\\s+to)\\s+(?:${ACTION}))${END}`,
@@ -285,6 +294,7 @@ export function forcesCommitment(text: string): boolean {
     )
     if (owedAction.test(tail)) return true
   }
+  if (speakerAt < 0 || hedgedBefore(text, speakerAt)) return false
   const speakerAction = new RegExp(
     `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)\\s+(?:${ACTION})${END}`,
     'iu',

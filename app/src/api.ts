@@ -43,12 +43,8 @@ type RequestInitJson = {
   contentType?: string
 }
 
-/** Session scheme built at runtime so the glasses bundle does not contain a static credential prefix. */
 export function sessionHeader(token: string): string {
-  const codes = [66, 101, 97, 114, 101, 114]
-  let scheme = ''
-  for (const code of codes) scheme += String.fromCharCode(code)
-  return `${scheme} ${token}`
+  return `Bearer ${token}`
 }
 
 export async function api<T>(path: string, init: RequestInitJson = {}): Promise<T> {

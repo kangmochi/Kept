@@ -40,6 +40,7 @@ const OPEN = new Set(['/health', '/pair', '/pair/challenge', '/pair/status', '/l
 
 /** A second poll inside this window does not receive the session token again. */
 const TOKEN_REVEAL_MS = 1000
+/** Intentionally longer than the 5 s on-glasses undo offer, so a slow network can still undo. */
 const UNDO_MS = 60_000
 
 function escapeHtml(value: string): string {

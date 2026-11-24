@@ -129,20 +129,40 @@ export function sortOpenTasks(tasks: Task[]): Task[] {
   })
 }
 
+type SchemaProperty = {
+  type?: string
+  select?: { options?: { name?: string | null }[] } | null
+}
+
 const REQUIRED: Record<string, string> = {
   Name: 'title',
   Due: 'date',
   Done: 'checkbox',
   Source: 'rich_text',
+  Person: 'rich_text',
 }
 
-export function schemaProblems(properties: Record<string, { type?: string }> | undefined): string[] {
+const DIRECTION_OPTIONS = ['I owe', 'Owed to me']
+
+export function schemaProblems(properties: Record<string, SchemaProperty> | undefined): string[] {
   const problems: string[] = []
   for (const [name, type] of Object.entries(REQUIRED)) {
     const actual = properties?.[name]?.type
     if (actual !== type) problems.push(`${name} should be ${type}`)
   }
+  const direction = properties?.Direction
+  if (direction?.type !== 'select') problems.push('Direction should be select')
   return problems
+}
+
+/** Missing select labels are not fatal. Notion creates them when a row is written. */
+export function directionOptionWarnings(properties: Record<string, SchemaProperty> | undefined): string[] {
+  const direction = properties?.Direction
+  if (direction?.type !== 'select') return []
+  const names = new Set((direction.select?.options ?? []).map((option) => option.name))
+  return DIRECTION_OPTIONS.filter((option) => !names.has(option)).map(
+    (option) => `Direction select is missing ${option}; Notion creates missing select options on write`,
+  )
 }
 
 export class NotionClient {
@@ -172,11 +192,12 @@ export class NotionClient {
     const dataSource = (await this.request(
       `https://api.notion.com/v1/data_sources/${this.cfg.dataSourceId}`,
       { method: 'GET' },
-    )) as { properties?: Record<string, { type?: string }> }
+    )) as { properties?: Record<string, SchemaProperty> }
     const problems = schemaProblems(dataSource.properties)
     if (problems.length) {
       throw new Error(`Notion data source schema does not match Keep — promises: ${problems.join('; ')}`)
     }
+    for (const warning of directionOptionWarnings(dataSource.properties)) console.warn(warning)
   }
 
   async queryOpen(): Promise<Task[]> {

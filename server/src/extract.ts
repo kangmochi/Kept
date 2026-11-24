@@ -124,10 +124,10 @@ export function fallbackTitle(text: string): string {
 }
 
 const INDONESIAN_UTTERANCE =
-  /\b(?:aku|saya|kamu|besok|kirim|bayar|kembalikan|mengembalikan|inget|ingetin|tolong|nanti|boleh|bisa)\b/i
+  /\b(?:aku|saya|kamu|gue|gw|dia|kasih|balas|nih|dong|deh|sih|besok|kirim|bayar|kembalikan|mengembalikan|inget|ingetin|tolong|nanti|boleh|bisa)\b/i
 const ENGLISH_SPEAKER = /\b(?:i'll|i will|i'm going to|im going to|i promised)\b/i
 const INDONESIAN_TITLE =
-  /\b(?:jam|kembalikan|mengembalikan|kembali|bayar|inget|ingetin|besok|kirim|kirimkan|ingatkan|telepon|hubungi|mengirim|membayar|pengembalian)\b/i
+  /\b(?:jam|kembalikan|mengembalikan|kembali|bayar|inget|ingetin|besok|kirim|kirimkan|ingatkan|telepon|telpon|hubungi|mengirim|membayar|pengembalian|selesaikan|perbaiki|siapkan|buatkan|ambil|cek|tanyakan|jemput|antar|lunasi|balas)\b/i
 
 /** English promises stay English. An Indonesian utterance is left alone. */
 export function looksEnglish(text: string): boolean {
@@ -137,7 +137,7 @@ export function looksEnglish(text: string): boolean {
   if (/\b(?:promised to|is going to)\b/i.test(text) && /\b(?:the|a|an|me|by|to)\b/i.test(text)) return true
   return (
     /\bwill\b/i.test(text) &&
-    /\b(?:the|a|an|by|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(text)
+    /\b(?:the|a|an|by|tomorrow|today|me|it|him|her|us|them|to|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(text)
   )
 }
 
