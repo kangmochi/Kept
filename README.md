@@ -10,7 +10,7 @@ Dates resolve in Asia/Jakarta. A missing date is shown as `DUE  ----` and can st
 
 ## Demo
 
-Demo video: <link added at submission>
+Demo video: [Watch the demo (2:15)](https://youtu.be/ouklRUDLAFQ)
 
 ## How it works
 
