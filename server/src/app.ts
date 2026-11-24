@@ -198,10 +198,11 @@ export function createApp(deps: AppDeps) {
 
   app.post('/listen', async (c) => {
     const length = Number(c.req.header('content-length') ?? 0)
-    if (length > MAX_PCM_BYTES + 128) return c.json({ error: 'Audio is longer than 20 seconds' }, 413)
+    const maxSeconds = MAX_PCM_BYTES / (16000 * 2)
+    if (length > MAX_PCM_BYTES + 128) return c.json({ error: `Audio is longer than ${maxSeconds} seconds` }, 413)
     const body = Buffer.from(await c.req.arrayBuffer())
     if (body.length === 0) return c.json({ error: 'Audio body is empty' }, 400)
-    if (body.length > MAX_PCM_BYTES + 128) return c.json({ error: 'Audio is longer than 20 seconds' }, 413)
+    if (body.length > MAX_PCM_BYTES + 128) return c.json({ error: `Audio is longer than ${maxSeconds} seconds` }, 413)
     try {
       const text = correctTranscript(await deps.transcribe(ensureWav(body)))
       return c.json({ text: text.slice(0, 2000) })

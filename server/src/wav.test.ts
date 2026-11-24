@@ -14,7 +14,7 @@ test('wraps raw s16le PCM in a 16 kHz mono WAV header', () => {
   assert.equal(wav.length, 44 + 3200)
 })
 
-test('ensureWav wraps PCM and caps a long buffer at 20 seconds', () => {
+test('ensureWav wraps PCM and caps a long buffer at 30 seconds', () => {
   const pcm = Buffer.alloc(MAX_PCM_BYTES + 8000, 2)
   const wav = ensureWav(pcm)
   assert.equal(wav.readUInt32LE(40), MAX_PCM_BYTES)

@@ -1,5 +1,5 @@
-/** 20 seconds of 16 kHz mono s16le PCM. */
-export const MAX_PCM_BYTES = 16000 * 2 * 20
+/** 30 seconds of 16 kHz mono s16le PCM. */
+export const MAX_PCM_BYTES = 16000 * 2 * 30
 
 export function pcmToWav(pcm: Buffer, sampleRate = 16000): Buffer {
   const data = pcm.subarray(0, MAX_PCM_BYTES)
@@ -24,7 +24,7 @@ export function isWav(body: Buffer): boolean {
   return body.length >= 12 && body.subarray(0, 4).toString('ascii') === 'RIFF' && body.subarray(8, 12).toString('ascii') === 'WAVE'
 }
 
-/** Wrap raw PCM. Truncate a WAV's data chunk to the 20 second cap. */
+/** Wrap raw PCM. Truncate a WAV's data chunk to the 30 second cap. */
 export function ensureWav(body: Buffer): Buffer {
   if (!isWav(body)) return pcmToWav(body)
   if (body.length < 44) return pcmToWav(Buffer.alloc(0))

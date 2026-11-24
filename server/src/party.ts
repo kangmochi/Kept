@@ -17,6 +17,12 @@ const NOT_PERSON = new Set([
   'for',
   'ke',
   'untuk',
+  'he',
+  'she',
+  'they',
+  'you',
+  'kamu',
+  'dia',
   'send',
   'pay',
   'call',
@@ -53,10 +59,19 @@ const SPEAKER_OWES = new RegExp(
   'iu',
 )
 
-const COUNTERPARTY = new RegExp(`${EDGE}(?:ke|untuk|for)\\s+(${NAME})${END}`, 'iu')
-const COUNTERPARTY_TO = new RegExp(`${EDGE}to\\s+(\\p{Lu}[\\p{L}'’-]{0,40})${END}`, 'u')
-
 const PERSONAL = new RegExp(`${EDGE}(?:i need to|i have to|remind me to|jangan lupa|don't forget to)${END}`, 'iu')
+const VERB = new RegExp(
+  `${EDGE}(?:send|pay|call|review|deliver|kirim|bayar|telepon|menelpon)${END}`,
+  'giu',
+)
+const ASK = new RegExp(
+  `${EDGE}(?:maybe\\s+you\\s+could|could\\s+you|can\\s+you|would\\s+you|you\\s+could|bisa\\s+tolong|kamu\\s+bisa|puedes|k[oö]nntest\\s+du|tu\\s+pourrais)${END}`,
+  'iu',
+)
+const AGREES = new RegExp(
+  `${EDGE}(?:(?:he|she|they|dia)\\s+(?:will|agreed|said|mau|akan|setuju)|said\\s+(?:he|she|they)'?ll|bilang\\s+(?:iya|ya))${END}`,
+  'iu',
+)
 
 export function cleanPerson(raw: string | null | undefined): string | null {
   if (!raw) return null
@@ -71,14 +86,71 @@ export function cleanDirection(raw: unknown): Direction | null {
   return null
 }
 
+function endsWithIng(name: string): boolean {
+  return /[\p{L}]ing$/iu.test(name)
+}
+
+function thanksFor(text: string, index: number): boolean {
+  return /thank(?:s|\s+you)\s+$/i.test(text.slice(Math.max(0, index - 16), index))
+}
+
+/**
+ * The other person next to the promise. English "for" and "to" need a
+ * capitalised name. "thanks for hopping" and a gerund are not names.
+ * Several names and no commitment verb means we are not sure, so return null.
+ */
+function namedCounterparty(text: string): string | null {
+  const found: { name: string; index: number }[] = []
+  const english = new RegExp(`${EDGE}(?:[Ff]or|[Tt]o)\\s+(\\p{Lu}[\\p{L}'’-]{0,40})${END}`, 'gu')
+  for (const match of text.matchAll(english)) {
+    const raw = match[1]
+    const index = match.index ?? 0
+    if (!raw || endsWithIng(raw) || thanksFor(text, index)) continue
+    const name = cleanPerson(raw)
+    if (name) found.push({ name, index })
+  }
+  const indo = new RegExp(`${EDGE}(?:ke|untuk)\\s+(${NAME})${END}`, 'giu')
+  for (const match of text.matchAll(indo)) {
+    const name = cleanPerson(match[1])
+    if (name) found.push({ name, index: match.index ?? 0 })
+  }
+  if (found.length === 0) return null
+  if (found.length === 1) return found[0].name
+  VERB.lastIndex = 0
+  const verbs = [...text.matchAll(VERB)].map((match) => match.index ?? 0)
+  if (verbs.length === 0) return null
+  let best = found[0]
+  let bestScore = Number.POSITIVE_INFINITY
+  for (const candidate of found) {
+    let score = Number.POSITIVE_INFINITY
+    for (const verb of verbs) {
+      const distance = candidate.index - verb
+      const weighted = distance >= 0 ? distance : Math.abs(distance) + 1000
+      if (weighted < score) score = weighted
+    }
+    if (score < bestScore) {
+      best = candidate
+      bestScore = score
+    }
+  }
+  return best.name
+}
+
+/** A request aimed at the listener. Agreement in the same utterance is owed to the speaker. */
+export function listenerAsk(text: string): 'ask' | 'owed' | 'none' {
+  const asked = ASK.test(text) || text.includes('もらえますか')
+  if (!asked) return 'none'
+  return AGREES.test(text) ? 'owed' : 'ask'
+}
+
+export function speakerPromises(text: string): boolean {
+  return SPEAKER_OWES.test(text)
+}
+
 /**
  * Locked means the utterance itself decides the party, so a model guess cannot
  * invent a person or a direction for these shapes.
  */
-function namedCounterparty(text: string): string | null {
-  return cleanPerson(text.match(COUNTERPARTY)?.[1] ?? text.match(COUNTERPARTY_TO)?.[1])
-}
-
 export function inferParty(text: string): { person: string | null; direction: Direction | null; locked: boolean } {
   for (const pattern of OWED) {
     const match = text.match(pattern)

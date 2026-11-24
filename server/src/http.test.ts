@@ -5,7 +5,7 @@ import { createApp, type NotionOps } from './app.js'
 import type { Env } from './env.js'
 import type { LlmClient } from './extract.js'
 import type { Task } from './types.js'
-import { pcmToWav } from './wav.js'
+import { MAX_PCM_BYTES, pcmToWav } from './wav.js'
 
 const SECRET = 'test-session-secret'
 
@@ -305,6 +305,14 @@ test('listen wraps raw PCM and reports a provider failure', async () => {
     body: pcmToWav(pcm),
   })
   assert.equal(failed.status, 502)
+
+  const tooLong = await ok.app.request('http://localhost/listen', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' },
+    body: Buffer.alloc(MAX_PCM_BYTES + 129),
+  })
+  assert.equal(tooLong.status, 413)
+  assert.match(((await json(tooLong)).error as string) ?? '', /30 seconds/)
 })
 
 test('pair status rate-limits the session token and reports expiry', async () => {

@@ -208,6 +208,67 @@ test('titles stay in the spoken language and drop the new date words', async () 
   assert.equal(cleanTitle('Call María', 'Call María'), 'Call María')
 })
 
+test('a request to the listener is not filed as the speaker owing it', async () => {
+  const english = await extractCommitment(
+    'If you happen to have those meeting notes, maybe you could send them sometime.',
+    fake({ isCommitment: true, title: 'send meeting notes', dueISO: null, confidence: 0.9, person: null, direction: 'I owe' }),
+    TUESDAY,
+  )
+  assert.equal(english.isCommitment, false)
+  assert.equal(english.title, null)
+  assert.equal(english.person, null)
+  assert.equal(english.direction, null)
+
+  const indo = await extractCommitment(
+    'Kalau kamu bisa kirim catatan rapatnya nanti.',
+    fake({ isCommitment: true, title: 'kirim catatan', dueISO: null, confidence: 0.9, direction: 'I owe' }),
+    TUESDAY,
+  )
+  assert.equal(indo.isCommitment, false)
+  assert.equal(indo.direction, null)
+
+  const tolong = await extractCommitment(
+    'Bisa tolong kirim nota rapatnya.',
+    fake({ isCommitment: true, title: 'kirim nota', dueISO: null, confidence: 0.8, direction: 'I owe' }),
+    TUESDAY,
+  )
+  assert.equal(tolong.isCommitment, false)
+
+  const agreed = await extractCommitment(
+    'Could you send the notes? He said he will on Friday.',
+    fake({ isCommitment: false, title: 'send the notes', dueISO: null, confidence: 0.9, person: 'He', direction: 'I owe' }),
+    TUESDAY,
+  )
+  assert.equal(agreed.isCommitment, true)
+  assert.equal(agreed.direction, 'Owed to me')
+  assert.equal(agreed.person, null)
+  assert.equal(agreed.dueISO, '2026-11-27')
+  assert.match(agreed.title ?? '', /notes/)
+})
+
+test('thanks for hopping does not steal the person next to the promise', async () => {
+  const result = await extractCommitment(
+    'Hey, thanks for hopping on. ... I will send the pricing to Sarah by Friday.',
+    fake({ isCommitment: true, title: 'send the pricing', dueISO: null, confidence: 0.9, person: 'hopping', direction: null }),
+    TUESDAY,
+  )
+  assert.equal(result.person, 'Sarah')
+  assert.equal(result.direction, 'I owe')
+  assert.equal(result.dueISO, '2026-11-27')
+})
+
+test('titles drop leftover date words and a leading I will', () => {
+  assert.equal(cleanTitle('Schicke Lukas Preise bis Ende Monat', 'bis Ende Monat'), 'Schicke Lukas Preise')
+  assert.equal(cleanTitle('Schicke Lukas Preise bis Ende des Monats', 'bis Ende des Monats'), 'Schicke Lukas Preise')
+  assert.equal(cleanTitle('Schicke Lukas Preise bis zum Monatsende', 'bis zum Monatsende'), 'Schicke Lukas Preise')
+  assert.equal(cleanTitle('enviar el viernes', 'enviar el viernes'), 'enviar')
+  assert.equal(cleanTitle('、今月末までに提案を送る', '今月末までに提案を送る'), '提案を送る')
+  assert.equal(cleanTitle('今 までに提案を送る', '今月末までに提案を送る'), '提案を送る')
+  assert.equal(cleanTitle('I will send the pricing', "I'll send the pricing"), 'send the pricing')
+  assert.equal(cleanTitle('aku akan kirim proposal', 'aku akan kirim proposal'), 'kirim proposal')
+  assert.equal(cleanTitle('el viernes', 'el viernes').length > 0, true)
+})
+
 test('empty text is a safe error and does not call the model', async () => {
   const calls: string[] = []
   await assert.rejects(
