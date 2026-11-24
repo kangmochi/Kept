@@ -4,7 +4,7 @@ Kept extracts **commitments with due dates** from a short utterance and files th
 
 **Track 04 · AI Assistants & Work** (Heads Up, Even Realities). The glasses remember what you promised, and file it in Notion before you forget.
 
-Idle shows how many open promises are in Notion and the next one due. One press listens for up to 20 seconds. The glasses ask **SAVE THIS?** with a short title and a due label. Press saves a row. Swipe discards. Swipe from idle opens the open promises; press one, then press again to mark it done.
+Idle shows how many open promises are in Notion and the next one due. One press listens for up to 30 seconds. The glasses ask **SAVE THIS?** with a short title and a due label. Press saves a row. Swipe discards. Swipe from idle opens the open promises; press one, then press again to mark it done.
 
 Dates resolve in Asia/Jakarta. A missing date is shown as `DUE  ----` and can still be saved. Kept does not invent a date.
 
@@ -110,7 +110,7 @@ If speech-to-text fails or hears nothing, the glasses show `COULDN'T HEAR` and t
 | Double press | System exit dialog | Back to idle | Discard | Back |
 | Swipe | Open the list | Ignored | Discard | Scroll the list, or leave MARK DONE? |
 
-After the transcript is sent, the glasses show `THINKING...` until **SAVE THIS?** or **NOT A PROMISE**. Listening also stops by itself after about 1.5 seconds of silence once speech has started. The 20 second cap is still there.
+After the transcript is sent, the glasses show `THINKING...` until **SAVE THIS?** or **NOT A PROMISE**. Listening also stops by itself after about 1.5 seconds of silence once speech has started. The 30 second cap is still there. The Even Hub SDK does not document a shorter mic stream limit.
 
 **CHECK THIS?** is the same screen as **SAVE THIS?** when the model confidence is under 0.5. The due date is left blank. Press still saves. **ALREADY SAVED?** means the open list already has a similar title on the same day. Press saves another copy. Swipe discards.
 

@@ -1,7 +1,7 @@
 import { API_BASE, ApiError, sessionHeader } from '../api'
 
-/** 20 seconds of 16 kHz mono s16le. The glasses send ~3200 bytes every 100 ms. */
-const MAX_PCM_BYTES = 16000 * 2 * 20
+/** 30 seconds of 16 kHz mono s16le. The glasses send ~3200 bytes every 100 ms. */
+const MAX_PCM_BYTES = 16000 * 2 * 30
 
 /**
  * Buffers glasses PCM and posts it to our backend. The WebView never calls

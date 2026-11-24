@@ -1,5 +1,5 @@
 import { dueLabel, hasDateCue, isValidISO, resolveDue, zonedISO } from './dates.js'
-import { cleanDirection, cleanPerson, inferParty } from './party.js'
+import { cleanDirection, cleanPerson, inferParty, listenerAsk, speakerPromises } from './party.js'
 import type { Direction, Extraction } from './types.js'
 
 export interface LlmClient {
@@ -52,11 +52,16 @@ const JA_WEEKDAY = '日曜日|月曜日|火曜日|水曜日|木曜日|金曜日|
 /** Drop calendar words from a title. Clock times such as "at 9" stay. */
 export function stripDateWords(title: string): string {
   let text = title
+    .replace(/今月末までに|今月末|月末までに/g, ' ')
     .replace(new RegExp(`来週の(?:${JA_WEEKDAY})`, 'g'), ' ')
     .replace(new RegExp(JA_WEEKDAY, 'g'), ' ')
     .replace(/明日|来週|月末/g, ' ')
+    .replace(/までに/g, ' ')
     .replace(/\d+週間後|\d+日後/g, ' ')
+    .replace(/^今\s+/g, ' ')
   const patterns = [
+    new RegExp(`${EDGE}bis\\s+(?:zum\\s+)?(?:ende(?:\\s+des)?\\s+monats?|monatsende)${END}`, 'giu'),
+    new RegExp(`${EDGE}(?:el|la|le|am|der)\\s+(?:${WEEKDAY}|${FOREIGN_DAY})${END}`, 'giu'),
     new RegExp(`${EDGE}(?:el\\s+)?pr[oó]xim[oa]\\s+(?:${FOREIGN_DAY})${END}`, 'giu'),
     new RegExp(`${EDGE}(?:${FOREIGN_DAY})\\s+que\\s+viene${END}`, 'giu'),
     new RegExp(
@@ -85,29 +90,131 @@ export function stripDateWords(title: string): string {
     /\b20\d{2}-\d{2}-\d{2}\b/g,
   ]
   for (const pattern of patterns) text = text.replace(pattern, ' ')
-  return text
+  text = text
     .replace(/\s+/g, ' ')
     .replace(/\s+([,])/g, '$1')
-    .replace(/\b(?:by|on|before|due)\b\s*$/i, '')
+    .replace(/、/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
-    .replace(/^[,.\-]+|[,.\-]+$/g, '')
-    .trim()
+  const dangling = new RegExp(`${EDGE}(?:el|la|le|der|de|zum|des|bis|à|a|ke|by|on|before|due)${END}$`, 'iu')
+  for (let i = 0; i < 4 && dangling.test(text); i += 1) text = text.replace(dangling, '').trim()
+  return text.replace(/^[,.\-、\s]+|[,.\-、\s]+$/g, '').trim()
+}
+
+const LEAD_IN =
+  /^(?:please\s+)?(?:remind me to|i'll|i will|i'm going to|im going to|aku akan|saya akan|tolong)\s+/i
+
+function withoutLead(title: string): string {
+  return title.replace(LEAD_IN, '')
 }
 
 export function fallbackTitle(text: string): string {
-  let title = normalizeUtterance(text)
-  title = title.replace(
-    /^(please\s+)?(remind me to|i'll|i will|i'm going to|im going to|aku akan|saya akan|tolong)\s+/i,
-    '',
-  )
-  return sanitizeTitle(stripDateWords(title))
+  return sanitizeTitle(stripDateWords(withoutLead(normalizeUtterance(text))))
 }
 
-/** Prefer a title without the date. Never return an empty string. */
+function fold(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const CONTENT_STOP = new Set([
+  'the', 'a', 'an', 'to', 'for', 'of', 'and', 'or', 'you', 'your', 'me', 'my', 'i', 'we', 'they', 'them', 'it',
+  'that', 'this', 'those', 'these', 'if', 'still', 'have', 'has', 'had', 'maybe', 'could', 'would', 'can',
+  'please', 'sometime', 'some', 'them', 'du', 'die', 'der', 'das', 'und', 'mir', 'sie', 'noch', 'hast', 'wenn',
+  'dir', 'den', 'dem', 'ein', 'eine', 'ich', 'si', 'las', 'los', 'el', 'la', 'de', 'del', 'que', 'un', 'una',
+  'tu', 'les', 'des', 'en', 'au', 'aux', 'encore', 'as', 'moi', 'lui', 'kamu', 'kalau', 'masih', 'yang', 'dan',
+  'di', 'ke', 'ini', 'itu', 'ada', 'bisa', 'tolong', 'boleh', 'will', 'aku', 'saya', 'je', 'con', 'por', 'para',
+  'tienes', 'konntest', 'sometime',
+])
+
+const VERB_PREFIXES = [
+  'send', 'schick', 'envoy', 'envi', 'mand', 'kirim', 'bayar', 'pagar', 'llam', 'call', 'deliver', 'entreg',
+  'review', 'revis', 'ruf', 'bezahl', 'mach', 'pay', 'appel', 'livr', 'remind',
+]
+
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?。？])\s*/u)
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+function isConditionalClause(sentence: string): boolean {
+  const line = fold(sentence)
+  return /^(if you|si tienes|si tu as|wenn du|kalau kamu)\b/.test(line) || sentence.includes('たら')
+}
+
+/** Speaker-promise sentence, skipping the ask and a conditional clause that only introduces it. */
+export function promiseSentence(text: string): string | null {
+  const parts = splitSentences(text)
+  const request = new Set<number>()
+  parts.forEach((part, index) => {
+    if (listenerAsk(part) === 'none') return
+    request.add(index)
+    if (index > 0 && isConditionalClause(parts[index - 1])) request.add(index - 1)
+  })
+  return parts.find((part, index) => !request.has(index) && speakerPromises(part)) ?? null
+}
+
+function requestText(text: string): string {
+  const parts = splitSentences(text)
+  const chunks: string[] = []
+  parts.forEach((part, index) => {
+    if (listenerAsk(part) === 'none') return
+    if (index > 0 && isConditionalClause(parts[index - 1])) chunks.push(parts[index - 1])
+    chunks.push(part)
+  })
+  return chunks.join(' ')
+}
+
+function latinTokens(text: string): string[] {
+  return fold(stripDateWords(text))
+    .split(' ')
+    .filter((word) => word.length > 2 && !CONTENT_STOP.has(word) && !VERB_PREFIXES.some((prefix) => word.startsWith(prefix)))
+}
+
+function jaGrams(text: string): string[] {
+  const core = text.replace(/[\s、。！？をはがにのへともでや]/g, '')
+  const grams: string[] = []
+  for (let i = 0; i < core.length - 1; i += 1) grams.push(core.slice(i, i + 2))
+  return grams
+}
+
+function overlapScore(title: string, sentence: string): number {
+  if (/[\u3040-\u30ff\u4e00-\u9fff]/.test(title)) {
+    const hay = sentence.replace(/[\s、。！？をはがにのへともでや]/g, '')
+    return jaGrams(title).filter((gram) => hay.includes(gram)).length
+  }
+  const words = new Set(latinTokens(sentence))
+  const hay = fold(sentence)
+  return latinTokens(title).filter((token) => words.has(token) || hay.includes(token)).length
+}
+
+/**
+ * True when the title is about the listener's request more than the speaker's promise.
+ * Content words are folded and stripped of stopwords and verb stems. Japanese uses character bigrams.
+ */
+export function titleMatchesRequest(title: string, utterance: string): boolean {
+  if (!title.trim() || listenerAsk(utterance) === 'none') return false
+  if (listenerAsk(title) === 'ask') return true
+  const request = requestText(utterance)
+  if (!request) return false
+  const requestScore = overlapScore(title, request)
+  if (requestScore === 0) return false
+  const promise = promiseSentence(utterance)
+  const promiseScore = promise ? overlapScore(title, promise) : 0
+  return requestScore > promiseScore
+}
+
+/** Prefer a title without the date. Strip the date before the 40-character cut. Never return an empty string. */
 export function cleanTitle(candidate: string, utterance: string): string {
-  const base = sanitizeTitle(candidate) || fallbackTitle(utterance) || sanitizeTitle(utterance)
-  const stripped = sanitizeTitle(stripDateWords(base))
-  return stripped || base || 'promise'
+  const stripped = sanitizeTitle(stripDateWords(withoutLead(candidate)))
+  return stripped || fallbackTitle(utterance) || sanitizeTitle(utterance) || 'promise'
 }
 
 function clampConfidence(value: unknown): number {
@@ -164,7 +271,12 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
     'direction is null for a personal task with no counterparty, such as booking your own flight or reviewing your own deck.',
     'Keep the title in the utterance language. Do not translate it. Keep a person name in the title when the speaker said it.',
     'isCommitment is true only when the speaker promised to do something (send, call, review, remind me, I will, aku akan, saya akan).',
+    'A request aimed at the listener is not the speaker\'s promise. could you, can you, maybe you could, would you, bisa tolong, kamu bisa, boleh kirim, ¿puedes, puedes enviarme, podrías, quizá puedas, könntest du, tu pourrais, tu pourras, もらえますか, and 送ってもらえる are asks.',
+    'Bare "puedes" or "puedas" (si no puedes, cuando puedas) is not a request. can you remind me, bisa ingetin aku, me recuerdas, erinnerst du mich, tu peux me rappeler, and 思い出させて are the speaker\'s own reminder.',
+    'If the speaker also promises something in the same utterance, title is that promise, not the request. Do not drop the promise because a request is also present.',
+    'If the other person agrees in the same utterance, isCommitment is true and direction is "Owed to me".',
     'Small talk such as thanks, see you, or ok sip is not a commitment.',
+    'person is the named counterparty of the promise. Ignore "thanks for" and words ending in -ing, such as hopping.',
     'title is a short display line, at most 40 characters, no trailing period.',
     'Do not put the due date, weekday, or relative day in the title. Drop words such as by Friday, tomorrow, besok, Jumat depan, end of month, and in 3 days.',
     'Keep a clock time in the title when the speaker says one, such as at 9 or jam 5.',
@@ -188,13 +300,29 @@ export async function extractCommitment(
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
 
+  const ask = listenerAsk(utterance)
   const raw = await llm.complete(buildExtractSystem(now, timeZone), utterance)
   const model = parseModelJson(raw)
-  if (!model.isCommitment) {
+  const promised = speakerPromises(utterance)
+  if (ask === 'ask' && !promised) {
+    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
+  }
+  let sourceTitle = model.title
+  let sourceUtterance = utterance
+  if (ask === 'ask' && titleMatchesRequest(model.title, utterance)) {
+    const sentence = promiseSentence(utterance)
+    if (!sentence) {
+      return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
+    }
+    sourceTitle = sentence
+    sourceUtterance = sentence
+  }
+  const owed = ask === 'owed' && !speakerPromises(utterance)
+  if (!model.isCommitment && !owed) {
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
 
-  const title = cleanTitle(model.title, utterance)
+  const title = cleanTitle(sourceTitle, sourceUtterance)
   const today = zonedISO(now, timeZone)
   const localDue = resolveDue(utterance, now, timeZone)
   let dueISO: string | null = localDue && localDue >= today ? localDue : null
@@ -212,6 +340,6 @@ export async function extractCommitment(
     dueLabel: dueLabel(dueISO, now, timeZone),
     confidence: model.confidence,
     person: party.locked ? party.person : model.person,
-    direction: party.locked ? party.direction : model.direction,
+    direction: owed ? 'Owed to me' : party.locked ? party.direction : model.direction,
   }
 }

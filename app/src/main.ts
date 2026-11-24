@@ -77,7 +77,8 @@ let markIndex = -1
 let rowTasks: (Task | null)[] = []
 let errorKind: ErrorKind = 'tasks'
 let pairCode = ''
-let secondsLeft = 20
+const LISTEN_SECONDS = 30
+let secondsLeft = LISTEN_SECONDS
 let listenTimer: number | null = null
 let pollTimer: number | null = null
 let op = 0
@@ -277,7 +278,7 @@ async function startListen() {
   const epoch = listenEpoch
   pcm.reset()
   silence.reset()
-  secondsLeft = 20
+  secondsLeft = LISTEN_SECONDS
   screen = 'listening'
   try {
     await bridge.audioControl(true, AudioInputSource.Glasses)

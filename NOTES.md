@@ -8,7 +8,7 @@ SDK symbols were checked against `@evenrealities/even_hub_sdk@0.0.16` (`dist/ind
 - The SDK exports a class spelled `ShutDownContaniner`. Kept calls `bridge.shutDownPageContainer(1)` on double-press of the root (idle and pairing) screen. Mode 0 is not used on the root.
 - `StartUpPageCreateResult.success` is numeric `0`. A failed startup page throws instead of being ignored.
 - Simulator 0.7.3 capped list item text around 63 bytes. List rows are clipped by UTF-8 bytes, not characters, so a row is not dropped. Displayed titles cap at 28 characters.
-- Listening stops after about 1.5 seconds of silence once the PCM RMS rises above 0.02. The 20 second cap and press-to-stop stay in place.
+- Listening stops after about 1.5 seconds of silence once the PCM RMS rises above 0.02. The 30 second cap and press-to-stop stay in place. `@evenrealities/even_hub_sdk@0.0.16` (`README.md` and `dist/index.d.ts`) documents no mic streaming or audio-event duration limit. The `timeoutMs: 5000` example is `getAppLocation`, not the microphone.
 - The API allows CORS from `http://localhost:5173`, `http://127.0.0.1:5173`, `evenhub://app`, and `https://evenhub.app`. Other origins get no allow-origin header.
 - `/pair/status` returns the session token at most once per second per code. The glasses poll every 1.5 seconds, so a missed response is picked up on the next poll.
 - A press on the idle or pairing screen waits 280 ms before it runs. That leaves room for a double-press to open the system exit dialog without also starting the microphone.
