@@ -1,0 +1,20 @@
+{
+  "package_id": "com.kangmochi.kept",
+  "name": "Kept",
+  "version": "0.1.0",
+  "edition": "202601",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "supported_languages": ["en"],
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Talks to the Kept backend to transcribe voice, extract commitments, and sync tasks with Notion.",
+      "whitelist": ["http://localhost:8787"]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Listens for a short spoken promise so Kept can file it as a Notion task."
+    }
+  ]
+}
