@@ -43,17 +43,27 @@ test('omits Due when the promise has no date', () => {
   assert.equal('Due' in body.properties, false)
 })
 
-test('schema check expects the four Keep — promises properties', () => {
+test('schema check expects the Keep — promises properties', () => {
   assert.deepEqual(
     schemaProblems({
       Name: { type: 'title' },
       Due: { type: 'date' },
       Done: { type: 'checkbox' },
       Source: { type: 'rich_text' },
+      Person: { type: 'rich_text' },
+      Direction: { type: 'select', select: { options: [{ name: 'I owe' }, { name: 'Owed to me' }] } },
     }),
     [],
   )
   assert.ok(schemaProblems({ Name: { type: 'rich_text' } }).length > 0)
+  const missing = schemaProblems({
+    Name: { type: 'title' },
+    Due: { type: 'date' },
+    Done: { type: 'checkbox' },
+    Source: { type: 'rich_text' },
+  })
+  assert.ok(missing.some((problem) => problem.includes('Person')))
+  assert.ok(missing.some((problem) => problem.includes('Direction')))
 })
 
 test('parses a page and sorts empty dates last', () => {

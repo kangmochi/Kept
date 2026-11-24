@@ -54,9 +54,11 @@ const EDGE = String.raw`(?<![\p{L}\p{N}_])`
 const END = String.raw`(?![\p{L}\p{N}_])`
 
 const PROPER = String.raw`\p{Lu}[\p{L}'’-]{0,40}`
+const PROMISE_VERBS =
+  'pay\\s+back|settle|refund|cover|bring|fix|sign|share|finish|submit|email|text|message|prepare|write|check|book|buy|send|pay|call|review|deliver|return|remind|kirim|bayar'
 const OWED = [
   new RegExp(`${EDGE}(${PROPER})\\s+said\\s+(?:he|she|they)'?ll\\b`, 'giu'),
-  new RegExp(`${EDGE}(${PROPER})\\s+will\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar)${END}`, 'giu'),
+  new RegExp(`${EDGE}(${PROPER})\\s+will\\s+(?:${PROMISE_VERBS})${END}`, 'giu'),
   // No i flag: the name has to be capitalised, so "the meeting is going to" is not a person.
   new RegExp(`${EDGE}(${PROPER})\\s+(?:promised\\s+to|is\\s+going\\s+to)\\s+`, 'gu'),
   new RegExp(`${EDGE}(${PROPER})\\s+(?:bilang|berkata)${END}`, 'giu'),
@@ -73,6 +75,7 @@ const VERB = new RegExp(
 )
 const ASK_SRC = [
   `${EDGE}(?:maybe\\s+you\\s+could|could\\s+you|can\\s+you|would\\s+you|you\\s+could)${END}`,
+  `${EDGE}(?:if\\s+)?i\\s+ask\\s+you${END}`,
   `${EDGE}(?:bisa\\s+tolong|kamu\\s+bisa|boleh\\s+kirim)${END}`,
   `${EDGE}k[oö]nntest\\s+du${END}`,
   `${EDGE}tu\\s+pourra(?:is|s)${END}`,
@@ -268,7 +271,7 @@ export function speakerPromises(text: string): boolean {
   return SPEAKER_OWES.test(text) || EXTRA_SPEAKER.test(text) || japaneseSpeakerPromise(text)
 }
 
-const ACTION = 'pay\\s+back|send|pay|call|remind|return|email|text|message|deliver|share|finish|submit'
+const ACTION = PROMISE_VERBS
 
 /**
  * True only for a real owed promise or an I'll plus an action verb.

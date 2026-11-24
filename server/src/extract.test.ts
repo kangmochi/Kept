@@ -9,6 +9,8 @@ import {
   englishPromiseTitle,
   extractCommitment,
   fallbackTitle,
+  indonesianLeak,
+  looksEnglish,
   promiseSentence,
   type LlmClient,
 } from './extract.js'
@@ -930,6 +932,69 @@ test('a bare I will is not forced into a promise', async () => {
     assert.equal(empty.isCommitment, false, line)
     assert.equal(empty.title, null, line)
   }
+})
+
+test('an owed english promise keeps an english title when the model translates it', async () => {
+  const settle = await extractCommitment(
+    'Alex will settle the invoice by Friday',
+    fake({ isCommitment: true, title: 'Bayar deposit', dueISO: null, confidence: 0.9, direction: 'I owe', person: null }),
+    TUESDAY,
+  )
+  assert.equal(settle.isCommitment, true)
+  assert.equal(settle.title, 'Settle the invoice')
+  assert.equal(settle.person, 'Alex')
+  assert.equal(settle.direction, 'Owed to me')
+  assert.equal(settle.dueISO, '2026-11-27')
+
+  const selesai = await extractCommitment(
+    'Alex will settle the invoice by Friday',
+    fake({ isCommitment: true, title: 'Selesaikan invoice', dueISO: null, confidence: 0.9, direction: 'I owe', person: null }),
+    TUESDAY,
+  )
+  assert.equal(selesai.title, 'Settle the invoice')
+  assert.equal(selesai.person, 'Alex')
+  assert.equal(selesai.direction, 'Owed to me')
+
+  const laptop = await extractCommitment(
+    'Alex promised to return my laptop by Friday',
+    fake({ isCommitment: true, title: 'Kembalikan laptop', dueISO: null, confidence: 0.9, direction: 'I owe', person: null }),
+    TUESDAY,
+  )
+  assert.equal(laptop.title, 'Return my laptop')
+  assert.equal(laptop.person, 'Alex')
+  assert.equal(laptop.direction, 'Owed to me')
+
+  const call = await extractCommitment(
+    'Alex will call me',
+    fake({ isCommitment: true, title: 'Telepon saya', dueISO: null, confidence: 0.9, direction: 'I owe', person: null }),
+    TUESDAY,
+  )
+  assert.equal(call.title, 'Call me')
+
+  const thought = await extractCommitment(
+    "I'll think about it",
+    fake({ isCommitment: false, title: 'Think about it', dueISO: '2026-11-25', confidence: 0.9, direction: 'I owe' }),
+    TUESDAY,
+  )
+  assert.equal(thought.isCommitment, false)
+  assert.equal(thought.title, null)
+
+  for (const line of ['can you send the notes', 'if I ask you to send the notes']) {
+    const asked = await extractCommitment(
+      line,
+      fake({ isCommitment: true, title: 'Send the notes', dueISO: '2026-11-27', confidence: 0.9, direction: 'I owe' }),
+      TUESDAY,
+    )
+    assert.equal(asked.isCommitment, false, line)
+    assert.equal(asked.title, null, line)
+  }
+
+  assert.equal(looksEnglish('Alex will call me'), true)
+  assert.equal(looksEnglish('Alex will fix it'), true)
+  assert.equal(looksEnglish('Alex will pay me today'), true)
+  assert.equal(looksEnglish('Jumat aku akan kirim sampel ke Budi'), false)
+  assert.equal(indonesianLeak('Selesaikan invoice', 'tolong selesaikan invoice'), false)
+  assert.equal(indonesianLeak('Selesaikan invoice', 'Alex will settle the invoice by Friday'), true)
 })
 
 test('every saved title starts with an uppercase letter', async () => {

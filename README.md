@@ -8,7 +8,18 @@ Idle shows how many open promises are in Notion and the next one due. One press 
 
 Dates resolve in Asia/Jakarta. A missing date is shown as `DUE  ----` and can still be saved. Kept does not invent a date.
 
-## Before 23 Nov 2026
+## Demo
+
+Demo video: <link added at submission>
+
+## How it works
+
+The glasses microphone sends a clip to the Hono server `/listen`, which turns speech into text.
+`/extract` reads that text with the model plus deterministic date and direction rules.
+The glasses confirm the promise, then a press files it in Notion.
+API keys stay in the server `.env`. The glasses only hold a pairing session token.
+
+## Built during the hackathon
 
 Nothing in this repository existed before 23 Nov 2026. `kangmochi/Kept` was created on 24 Nov 2026 for the Heads Up hackathon. The glasses app, the Hono backend, pairing, commitment extraction, Notion read/write, tests, and the simulator script were built during the event.
 
@@ -19,7 +30,7 @@ These tools already existed and are used as-is:
 - The public Notion REST API, pinned here to `Notion-Version: 2026-03-11`.
 - Public OpenAI-compatible chat and audio APIs. The defaults point at Mistral and can be pointed at another host with environment variables only.
 
-The Notion database **Keep — promises** was created by the operator before this backend. Kept does not create a database, add properties, or seed rows. Leave that title as it is. The `Source` property is stored as `kept-g2: <transcript>` so older rows stay recognizable.
+The Notion database **Keep — promises** was created by the operator before this backend. Kept does not create a database, add properties, or seed rows. Kept expects this exact database title (the name predates the product name Kept). The `Source` property is stored as `kept-g2: <transcript>` so older rows stay recognizable.
 
 ## What you need
 
@@ -34,12 +45,14 @@ npm install -g @evenrealities/evenhub-cli@0.2.0 @evenrealities/evenhub-simulator
 
 The database properties must already be:
 
-| Property | Type        |
-| -------- | ----------- |
-| Name     | Title       |
-| Due      | Date        |
-| Done     | Checkbox    |
-| Source   | Rich text   |
+| Property  | Type                       |
+| --------- | -------------------------- |
+| Name      | Title                      |
+| Due       | Date                       |
+| Done      | Checkbox                   |
+| Source    | Rich text                  |
+| Person    | Rich text                  |
+| Direction | Select (I owe, Owed to me) |
 
 ## Run the simulator demo
 
@@ -55,7 +68,7 @@ Fill these in `.env` yourself. Do not commit that file and do not paste the valu
 - `LLM_API_KEY` and `STT_API_KEY` (they may be the same Mistral key)
 - `SESSION_SECRET` (any long random string)
 
-Copying `.env.example` turns `ALLOW_DEV_PAIR` on for this machine. The server leaves it off when the variable is missing. Turn it off before any hosted deploy. With it on, a dev build of the glasses app and this loopback request issue a session without the link page:
+Copying `.env.example` turns `ALLOW_DEV_PAIR` on for this machine. The server leaves it off when the variable is missing. Turn it off before any hosted deploy. With it on, a dev build (or this loopback request) gets a session without the link page:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8787/pair \
@@ -100,7 +113,7 @@ evenhub-simulator "http://localhost:5173/?inject=I'll%20send%20the%20pricing%20b
 
 `DEMO_INJECT` does not push text into a simulator that is already open. Pass `--spawn`, or open that URL yourself, so the click lands on **SAVE THIS?** instead of starting the microphone.
 
-If speech-to-text fails or hears nothing, the glasses show `COULDN'T HEAR` and the inject field stays available. English voices often hear the name "Budi" as "Buddy" or "Booty". Say the name once, clearly, or type it in the inject field.
+If speech-to-text fails or hears nothing, the glasses show `COULDN'T HEAR` and the inject field stays available. Speech recognition often hears the name "Budi" as "Buddy". Say the name clearly, or type it in the inject field.
 
 ### What the gestures do
 
@@ -122,9 +135,9 @@ Double-press on the root calls `shutDownPageContainer(1)`, which is the system e
 
 One utterance files one promise. A second promise in the same sentence is ignored. The open list shows at most 20 rows. Dates the model invents in the past are dropped. The idle line `2 DUE TODAY  1 LATE` and `KEPT 8/10 THIS WEEK` use Asia/Jakarta. The week is Monday through Sunday. If the week query fails, that line is hidden. If the open list cannot refresh, idle shows `offline` and keeps the last snapshot.
 
-Person and Direction are optional on an existing Keep — promises row. Direction is exactly `I owe` or `Owed to me`. The glasses show `I OWE` and `OWED TO ME`. When an open `I owe` promise exists, idle shows that debt instead of the generic next-due line.
+Person and Direction are required properties. A row leaves them empty when nobody else is named. Direction is exactly `I owe` or `Owed to me`. The glasses show `I OWE` and `OWED TO ME`. When an open `I owe` promise exists, idle shows that debt instead of the generic next-due line.
 
-Spanish, German, French, and Japanese dates (tomorrow, weekdays, next week, end of month, in N days or weeks, and a clock time) are parsed in Asia/Jakarta and saved. Japanese text is sent to the display as UTF-8. CJK glyphs may not render on the G1/G2 display. The app does not crash, and list rows stay clipped at 63 UTF-8 bytes.
+Dates in a few other languages are also parsed (tested); the UI is English only. Japanese text is sent to the display as UTF-8. CJK glyphs may not render on the G2 display. The app does not crash, and list rows stay clipped at 63 UTF-8 bytes.
 
 ## Tests
 
@@ -175,14 +188,14 @@ Before sharing a bundle, from the repo root:
 
 ```bash
 npm run build
-grep -riE 'secret_|ntn_|sk-|Bearer ' app/dist || true
+grep -rE 'secret_[A-Za-z0-9]{8}|ntn_[A-Za-z0-9]{8}|sk-[A-Za-z0-9]{16}|Bearer [A-Za-z0-9._-]{20}' app/dist
 ```
 
 That search should print nothing. Keys stay in the server `.env`.
 
 ## Optional real glasses
 
-The phone cannot see the laptop's `localhost`. That path is not required for the simulator video. If you try it later: bind the server with `HOST=0.0.0.0`, put the phone and laptop on the same LAN, add the exact origin (for example `http://192.168.1.20:8787`) to the network whitelist, and run `evenhub qr --url "http://192.168.1.20:5173"` with Vite's host already set. An HTTPS tunnel origin would be added the same way, one full origin at a time. Do not publish any other machine.
+Real-glasses use needs a reachable backend; not covered in this build.
 
 ## Layout
 
@@ -193,3 +206,7 @@ scripts/   simulator automation
 ```
 
 `NOTES.md` records where the installed SDK typings differ from older samples.
+
+## License
+
+MIT. Copyright 2026 kangmochi.
