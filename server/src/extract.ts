@@ -112,6 +112,37 @@ export function fallbackTitle(text: string): string {
   return sanitizeTitle(stripDateWords(withoutLead(normalizeUtterance(text))))
 }
 
+const INDONESIAN_UTTERANCE =
+  /\b(?:aku|saya|kamu|besok|kirim|bayar|kembalikan|mengembalikan|inget|ingetin|tolong|nanti|boleh|bisa)\b/i
+const ENGLISH_SPEAKER = /\b(?:i'll|i will|i'm going to|im going to|i promised)\b/i
+const INDONESIAN_TITLE = /\b(?:jam|kembalikan|mengembalikan|kembali|bayar|inget|ingetin|besok|kirim)\b/i
+
+/** English promises stay English. An Indonesian utterance is left alone. */
+export function looksEnglish(text: string): boolean {
+  if (/[\u3040-\u30ff\u4e00-\u9fff]/.test(text)) return false
+  if (INDONESIAN_UTTERANCE.test(text)) return false
+  if (ENGLISH_SPEAKER.test(text)) return true
+  if (/\b(?:promised to|is going to)\b/i.test(text) && /\b(?:the|a|an|me|by|to)\b/i.test(text)) return true
+  return (
+    /\bwill\b/i.test(text) &&
+    /\b(?:the|a|an|by|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(text)
+  )
+}
+
+export function indonesianLeak(title: string): boolean {
+  return INDONESIAN_TITLE.test(title)
+}
+
+/** A stable English title from the utterance, used when the model translates it. */
+export function englishPromiseTitle(text: string): string {
+  let line = normalizeUtterance(text)
+  line = line.replace(/^(?:i'll|i will|i'm going to|im going to|i promised(?:\s+to)?)\s+/i, '')
+  line = line.replace(/^(?:\p{L}[\p{L}'’-]{0,40}\s+)(?:promised\s+to|is\s+going\s+to|will)\s+/iu, '')
+  const title = sanitizeTitle(stripDateWords(line))
+  if (!title) return 'Promise'
+  return title.charAt(0).toUpperCase() + title.slice(1)
+}
+
 function fold(text: string): string {
   return text
     .normalize('NFD')
@@ -266,10 +297,11 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
     `Today is ${today}. The timezone is ${timeZone}.`,
     'Return only a JSON object with keys isCommitment (boolean), title (string), dueISO (YYYY-MM-DD or null), confidence (number from 0 to 1), person (string or null), direction ("I owe", "Owed to me", or null).',
     'person is the other named person, never I, me, aku, or saya. Use null when nobody else is named.',
-    'direction is "I owe" when the speaker promises to send, pay, review, call, or deliver for someone else, even if that person is unnamed.',
-    'direction is "Owed to me" when someone else promised the speaker.',
+    'direction is "I owe" when the speaker promises to send, pay, review, call, deliver, or remind someone, even if that person is unnamed. "I\'ll", "I will", and "I promised" are "I owe".',
+    'direction is "Owed to me" when someone else promised the speaker. When a named person promised to, will, or is going to do something, including "pay me back", person is that name and direction is "Owed to me".',
     'direction is null for a personal task with no counterparty, such as booking your own flight or reviewing your own deck.',
-    'Keep the title in the utterance language. Do not translate it. Keep a person name in the title when the speaker said it.',
+    'Write the title in the same language as the utterance, even when it mixes languages. Never translate English into Indonesian or the reverse.',
+    'Keep a person name in the title when the speaker said it.',
     'isCommitment is true only when the speaker promised to do something (send, call, review, remind me, I will, aku akan, saya akan).',
     'A request aimed at the listener is not the speaker\'s promise. could you, can you, maybe you could, would you, bisa tolong, kamu bisa, boleh kirim, ¿puedes, puedes enviarme, podrías, quizá puedas, könntest du, tu pourrais, tu pourras, もらえますか, and 送ってもらえる are asks.',
     'Bare "puedes" or "puedas" (si no puedes, cuando puedas) is not a request. can you remind me, bisa ingetin aku, me recuerdas, erinnerst du mich, tu peux me rappeler, and 思い出させて are the speaker\'s own reminder.',
@@ -279,11 +311,36 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
     'person is the named counterparty of the promise. Ignore "thanks for" and words ending in -ing, such as hopping.',
     'title is a short display line, at most 40 characters, no trailing period.',
     'Do not put the due date, weekday, or relative day in the title. Drop words such as by Friday, tomorrow, besok, Jumat depan, end of month, and in 3 days.',
-    'Keep a clock time in the title when the speaker says one, such as at 9 or jam 5.',
+    'Keep a clock time in the title when the speaker says one, such as at 9 or 5pm.',
     'dueISO is a calendar date in that timezone. If the utterance has no date, dueISO must be null.',
     'Never guess or invent a date. Never return a date before today. If you are unsure, use null.',
     'Resolve by Friday, tomorrow, besok, Jumat, next week, end of month, in N days, and a clock time against today.',
   ].join('\n')
+}
+
+function strictEnglishSystem(now: Date, timeZone: string): string {
+  return [
+    buildExtractSystem(now, timeZone),
+    'The utterance is English. Write the title in English only.',
+    'Never translate English into Indonesian. Do not use jam, kembalikan, bayar, inget, besok, or kirim in the title.',
+  ].join('\n')
+}
+
+async function recoverEnglishTitle(
+  utterance: string,
+  llm: LlmClient,
+  now: Date,
+  timeZone: string,
+): Promise<string> {
+  try {
+    const raw = await llm.complete(strictEnglishSystem(now, timeZone), utterance)
+    const again = parseModelJson(raw)
+    const cleaned = cleanTitle(again.title, utterance)
+    if (again.isCommitment && cleaned && !indonesianLeak(cleaned)) return cleaned
+  } catch {
+    // The retry did not return an English title.
+  }
+  return englishPromiseTitle(utterance)
 }
 
 export async function extractCommitment(
@@ -322,7 +379,10 @@ export async function extractCommitment(
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
 
-  const title = cleanTitle(sourceTitle, sourceUtterance)
+  let title = cleanTitle(sourceTitle, sourceUtterance)
+  if (looksEnglish(utterance) && indonesianLeak(title)) {
+    title = await recoverEnglishTitle(utterance, llm, now, timeZone)
+  }
   const today = zonedISO(now, timeZone)
   const localDue = resolveDue(utterance, now, timeZone)
   let dueISO: string | null = localDue && localDue >= today ? localDue : null

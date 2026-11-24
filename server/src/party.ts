@@ -50,12 +50,17 @@ const END = String.raw`(?![\p{L}\p{N}_])`
 
 const OWED = [
   new RegExp(`${EDGE}(${NAME})\\s+said\\s+(?:he|she|they)'?ll\\b`, 'iu'),
-  new RegExp(`${EDGE}(${NAME})\\s+will\\s+(?:send|pay|call|review|deliver|kirim|bayar)${END}`, 'iu'),
+  new RegExp(`${EDGE}(${NAME})\\s+will\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar)${END}`, 'iu'),
+  new RegExp(`${EDGE}(${NAME})\\s+(?:promised\\s+to|is\\s+going\\s+to)\\s+`, 'iu'),
   new RegExp(`${EDGE}(${NAME})\\s+(?:bilang|berkata)${END}`, 'iu'),
 ]
 
 const SPEAKER_OWES = new RegExp(
-  `${EDGE}(?:i'll|i will|i'm going to|im going to|aku akan|saya akan|aku|saya)\\s+(?:send|pay|call|review|deliver|kirim|bayar|telepon|menelpon)${END}`,
+  `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?|aku akan|saya akan|aku|saya)\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar|telepon|menelpon)${END}`,
+  'iu',
+)
+const SPEAKER_EN = new RegExp(
+  `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)${END}`,
   'iu',
 )
 
@@ -159,6 +164,24 @@ function namedCounterparty(text: string): string | null {
   return best.name
 }
 
+const NOT_OBJECT = new Set(['by', 'at', 'on', 'before', 'back', 'pm', 'am', 'me'])
+
+/** The named person the speaker is promising, when "for/to" is not used. */
+function speakerPerson(text: string): string | null {
+  const named = namedCounterparty(text)
+  if (named) return named
+  const match = text.match(
+    new RegExp(`${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)\\s+([\\s\\S]{0,80})`, 'iu'),
+  )
+  if (!match?.[1]) return null
+  for (const token of match[1].split(/[^\p{L}'’-]+/u)) {
+    if (!token || NOT_OBJECT.has(token.toLowerCase()) || !/^\p{Lu}/u.test(token)) continue
+    const person = cleanPerson(token)
+    if (person) return person
+  }
+  return null
+}
+
 const REMIND = [
   `${EDGE}(?:can|could|would)\\s+you\\s+remind\\s+me${END}`,
   `${EDGE}bisa\\s+ingetin\\s+aku${END}`,
@@ -220,8 +243,8 @@ export function inferParty(text: string): { person: string | null; direction: Di
     const person = cleanPerson(match?.[1])
     if (person) return { person, direction: 'Owed to me', locked: true }
   }
-  if (SPEAKER_OWES.test(text)) {
-    return { person: namedCounterparty(text), direction: 'I owe', locked: true }
+  if (SPEAKER_OWES.test(text) || SPEAKER_EN.test(text)) {
+    return { person: speakerPerson(text), direction: 'I owe', locked: true }
   }
   if (PERSONAL.test(text) && !namedCounterparty(text)) {
     return { person: null, direction: null, locked: true }

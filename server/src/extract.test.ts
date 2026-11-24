@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { loadEnvFiles, readEnv } from './env.js'
-import { ExtractError, cleanTitle, extractCommitment, fallbackTitle, promiseSentence, type LlmClient } from './extract.js'
+import {
+  ExtractError,
+  buildExtractSystem,
+  cleanTitle,
+  englishPromiseTitle,
+  extractCommitment,
+  fallbackTitle,
+  promiseSentence,
+  type LlmClient,
+} from './extract.js'
 import { listenerAsk, speakerPromises } from './party.js'
 import { createLlmClient } from './providers.js'
 
@@ -471,6 +480,184 @@ test('casual phrases are not speaker promises', () => {
   assert.equal(speakerPromises('Dann sende ich die Datei'), true)
   assert.equal(speakerPromises('Morgen rufe ich Anna an'), true)
   assert.equal(speakerPromises('見積もりを送ります'), true)
+})
+
+test('english promises stay in English with a stable party', async () => {
+  const system = buildExtractSystem(TUESDAY, 'Asia/Jakarta')
+  assert.match(system, /Write the title in the same language as the utterance/)
+  assert.match(system, /Never translate English into Indonesian or the reverse/)
+  assert.match(system, /at 9 or 5pm/)
+  assert.equal(system.includes('jam 5'), false)
+
+  const cases = [
+    {
+      text: "I'll call Nadia by 5pm tomorrow",
+      bad: 'call Nadia jam 5',
+      title: 'Call Nadia by 5pm',
+      person: 'Nadia',
+      direction: 'I owe' as const,
+      due: '2026-11-25',
+    },
+    {
+      text: 'Alex promised to return the laptop by Friday',
+      bad: 'Kembalikan laptop',
+      title: 'Return the laptop',
+      person: 'Alex',
+      direction: 'Owed to me' as const,
+      due: '2026-11-27',
+    },
+    {
+      text: 'Alex promised to return the deposit by Friday',
+      bad: 'Kembalikan deposit',
+      title: 'Return the deposit',
+      person: 'Alex',
+      direction: 'Owed to me' as const,
+      due: '2026-11-27',
+    },
+    {
+      text: 'Alex promised to pay me back the deposit by Friday',
+      bad: 'Bayar kembali deposit',
+      title: 'Pay me back the deposit',
+      person: 'Alex',
+      direction: 'Owed to me' as const,
+      due: '2026-11-27',
+    },
+    {
+      text: 'Alex will send the samples by Friday',
+      bad: 'Kirim sampel',
+      title: 'Send the samples',
+      person: 'Alex',
+      direction: 'Owed to me' as const,
+      due: '2026-11-27',
+    },
+    {
+      text: "I'll pay Alex back by Friday",
+      bad: 'Bayar Alex',
+      title: 'Pay Alex back',
+      person: 'Alex',
+      direction: 'I owe' as const,
+      due: '2026-11-27',
+    },
+    {
+      text: "I'll remind Nadia by Friday",
+      bad: 'Inget Nadia',
+      title: 'Remind Nadia',
+      person: 'Nadia',
+      direction: 'I owe' as const,
+      due: '2026-11-27',
+    },
+  ]
+  for (const item of cases) {
+    const calls: string[] = []
+    const result = await extractCommitment(
+      item.text,
+      {
+        async complete(prompt: string) {
+          calls.push(prompt)
+          return JSON.stringify({
+            isCommitment: true,
+            title: item.bad,
+            dueISO: null,
+            confidence: 0.9,
+            person: null,
+            direction: 'I owe',
+          })
+        },
+      },
+      TUESDAY,
+    )
+    assert.equal(calls.length, 2, item.text)
+    assert.match(calls[1], /Write the title in English only/, item.text)
+    assert.equal(result.isCommitment, true, item.text)
+    assert.equal(result.title, item.title, item.text)
+    assert.equal(result.title, englishPromiseTitle(item.text), item.text)
+    assert.equal(result.person, item.person, item.text)
+    assert.equal(result.direction, item.direction, item.text)
+    assert.equal(result.dueISO, item.due, item.text)
+    const again = await extractCommitment(
+      item.text,
+      fake({ isCommitment: true, title: item.bad, dueISO: null, confidence: 0.9, person: null, direction: 'I owe' }),
+      TUESDAY,
+    )
+    assert.equal(again.title, result.title, item.text)
+  }
+
+  const controlCalls: string[] = []
+  const control = await extractCommitment(
+    "I'll call Nadia tomorrow",
+    {
+      async complete(prompt: string) {
+        controlCalls.push(prompt)
+        return JSON.stringify({ isCommitment: true, title: 'call Nadia', dueISO: null, confidence: 0.9, person: null, direction: null })
+      },
+    },
+    TUESDAY,
+  )
+  assert.equal(controlCalls.length, 1)
+  assert.equal(control.title, 'call Nadia')
+  assert.equal(control.person, 'Nadia')
+  assert.equal(control.direction, 'I owe')
+  assert.equal(control.dueISO, '2026-11-25')
+
+  const retriedCalls: string[] = []
+  const retried = await extractCommitment(
+    "I'll call Nadia by 5pm tomorrow",
+    {
+      async complete() {
+        const title = retriedCalls.length === 0 ? 'call Nadia jam 5' : 'call Nadia at 5pm'
+        retriedCalls.push(title)
+        return JSON.stringify({ isCommitment: true, title, dueISO: null, confidence: 0.9, person: 'Nadia', direction: 'I owe' })
+      },
+    },
+    TUESDAY,
+  )
+  assert.equal(retriedCalls.length, 2)
+  assert.equal(retried.title, 'call Nadia at 5pm')
+  assert.equal(retried.person, 'Nadia')
+  assert.equal(retried.direction, 'I owe')
+  assert.equal(retried.dueISO, '2026-11-25')
+
+  const indonesian = [
+    {
+      text: 'Besok aku bayar tagihan listrik ke Andi',
+      title: 'Bayar tagihan listrik ke Andi',
+      person: 'Andi',
+      direction: 'I owe' as const,
+      due: '2026-11-25',
+    },
+    {
+      text: 'Jumat aku akan kirim sampel ke Budi',
+      title: 'Kirim sampel ke Budi',
+      person: 'Budi',
+      direction: 'I owe' as const,
+      due: '2026-11-27',
+    },
+  ]
+  for (const item of indonesian) {
+    const calls: string[] = []
+    const result = await extractCommitment(
+      item.text,
+      {
+        async complete(prompt: string) {
+          calls.push(prompt)
+          return JSON.stringify({
+            isCommitment: true,
+            title: item.title,
+            dueISO: null,
+            confidence: 0.9,
+            person: null,
+            direction: null,
+          })
+        },
+      },
+      TUESDAY,
+    )
+    assert.equal(calls.length, 1, item.text)
+    assert.equal(result.title, item.title, item.text)
+    assert.equal(result.person, item.person, item.text)
+    assert.equal(result.direction, item.direction, item.text)
+    assert.equal(result.dueISO, item.due, item.text)
+  }
 })
 
 test('empty text is a safe error and does not call the model', async () => {
