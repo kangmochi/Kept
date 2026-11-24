@@ -1,5 +1,5 @@
 import { dueLabel, hasDateCue, isValidISO, resolveDue, zonedISO } from './dates.js'
-import { cleanDirection, cleanPerson, inferParty, listenerAsk, speakerPromises } from './party.js'
+import { askClause, cleanDirection, cleanPerson, inferParty, listenerAsk, speakerPromises } from './party.js'
 import type { Direction, Extraction } from './types.js'
 
 export interface LlmClient {
@@ -112,11 +112,33 @@ export function fallbackTitle(text: string): string {
   return sanitizeTitle(stripDateWords(withoutLead(normalizeUtterance(text))))
 }
 
-/** Prefer a title without the date. Never return an empty string. */
+function fold(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * True when the model title is the listener's request rather than the speaker's promise.
+ * A shared verb is not enough: the title has to sit in the ask sentence and not in the rest.
+ */
+export function titleMatchesRequest(title: string, utterance: string): boolean {
+  const clause = askClause(utterance)
+  if (!clause) return false
+  const normTitle = fold(stripDateWords(title))
+  if (normTitle.length < 2) return false
+  const promiseSide = fold(utterance.replace(clause, ' '))
+  return fold(clause).includes(normTitle) && !promiseSide.includes(normTitle)
+}
+
+/** Prefer a title without the date. Strip the date before the 40-character cut. Never return an empty string. */
 export function cleanTitle(candidate: string, utterance: string): string {
-  const base = sanitizeTitle(withoutLead(candidate)) || fallbackTitle(utterance) || sanitizeTitle(utterance)
-  const stripped = sanitizeTitle(stripDateWords(base))
-  return stripped || base || 'promise'
+  const stripped = sanitizeTitle(stripDateWords(withoutLead(candidate)))
+  return stripped || fallbackTitle(utterance) || sanitizeTitle(utterance) || 'promise'
 }
 
 function clampConfidence(value: unknown): number {
@@ -173,7 +195,9 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
     'direction is null for a personal task with no counterparty, such as booking your own flight or reviewing your own deck.',
     'Keep the title in the utterance language. Do not translate it. Keep a person name in the title when the speaker said it.',
     'isCommitment is true only when the speaker promised to do something (send, call, review, remind me, I will, aku akan, saya akan).',
-    'A request aimed at the listener is not the speaker\'s promise. could you, can you, maybe you could, would you, bisa tolong, kamu bisa, puedes, könntest du, tu pourrais, and もらえますか are asks. Do not file those as I owe.',
+    'A request aimed at the listener is not the speaker\'s promise. could you, can you, maybe you could, would you, bisa tolong, kamu bisa, boleh kirim, ¿puedes, puedes enviarme, podrías, quizá puedas, könntest du, tu pourrais, tu pourras, もらえますか, and 送ってもらえる are asks.',
+    'Bare "puedes" or "puedas" (si no puedes, cuando puedas) is not a request. can you remind me, bisa ingetin aku, me recuerdas, erinnerst du mich, tu peux me rappeler, and 思い出させて are the speaker\'s own reminder.',
+    'If the speaker also promises something in the same utterance, title is that promise, not the request. Do not drop the promise because a request is also present.',
     'If the other person agrees in the same utterance, isCommitment is true and direction is "Owed to me".',
     'Small talk such as thanks, see you, or ok sip is not a commitment.',
     'person is the named counterparty of the promise. Ignore "thanks for" and words ending in -ing, such as hopping.',
@@ -203,7 +227,11 @@ export async function extractCommitment(
   const ask = listenerAsk(utterance)
   const raw = await llm.complete(buildExtractSystem(now, timeZone), utterance)
   const model = parseModelJson(raw)
-  if (ask === 'ask' && !speakerPromises(utterance)) {
+  const promised = speakerPromises(utterance)
+  if (ask === 'ask' && !promised) {
+    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
+  }
+  if (ask === 'ask' && titleMatchesRequest(model.title, utterance)) {
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
   const owed = ask === 'owed' && !speakerPromises(utterance)

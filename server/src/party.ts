@@ -64,8 +64,29 @@ const VERB = new RegExp(
   `${EDGE}(?:send|pay|call|review|deliver|kirim|bayar|telepon|menelpon)${END}`,
   'giu',
 )
-const ASK = new RegExp(
-  `${EDGE}(?:maybe\\s+you\\s+could|could\\s+you|can\\s+you|would\\s+you|you\\s+could|bisa\\s+tolong|kamu\\s+bisa|puedes|k[oö]nntest\\s+du|tu\\s+pourrais)${END}`,
+const ASK_SRC = [
+  `${EDGE}(?:maybe\\s+you\\s+could|could\\s+you|can\\s+you|would\\s+you|you\\s+could)${END}`,
+  `${EDGE}(?:bisa\\s+tolong|kamu\\s+bisa|boleh\\s+kirim)${END}`,
+  `${EDGE}k[oö]nntest\\s+du${END}`,
+  `${EDGE}tu\\s+pourra(?:is|s)${END}`,
+  `${EDGE}¿\\s*puedes${END}`,
+  `${EDGE}puedes\\s+enviar\\p{L}*${END}`,
+  `${EDGE}podr[ií]as${END}`,
+  `${EDGE}quiz[aá]s?\\s+puedas${END}`,
+].join('|')
+const JA_ASKS = ['送ってもらえる', 'もらえますか']
+const EXTRA_SPEAKER = new RegExp(
+  [
+    `${EDGE}(?:enviar[eé]|mandar[eé])${END}`,
+    `${EDGE}voy\\s+a(?:\\s+\\p{L}+)?${END}`,
+    `${EDGE}ich\\s+(?:schicke|werde|sende)${END}`,
+    `${EDGE}j['’]enverrai${END}`,
+    `${EDGE}je\\s+vous\\s+enverrai${END}`,
+    `${EDGE}je\\s+vais${END}`,
+    '送ります',
+    'します',
+    'やります',
+  ].join('|'),
   'iu',
 )
 const AGREES = new RegExp(
@@ -136,15 +157,48 @@ function namedCounterparty(text: string): string | null {
   return best.name
 }
 
+const REMIND = [
+  `${EDGE}(?:can|could|would)\\s+you\\s+remind\\s+me${END}`,
+  `${EDGE}bisa\\s+ingetin\\s+aku${END}`,
+  `${EDGE}me\\s+recuerdas${END}`,
+  `${EDGE}erinnerst\\s+du\\s+mich${END}`,
+  `${EDGE}tu\\s+peux\\s+me\\s+rappeler${END}`,
+]
+
+/** Reminding the speaker is their own task, so it is not a request to the listener. */
+function maskRemind(text: string): string {
+  let masked = text
+  for (const cue of REMIND) masked = masked.replace(new RegExp(cue, 'giu'), (hit) => ' '.repeat(hit.length))
+  return masked.replaceAll('思い出させて', ' '.repeat('思い出させて'.length))
+}
+
+function findAsk(text: string): { index: number } | null {
+  const masked = maskRemind(text)
+  const latin = new RegExp(ASK_SRC, 'iu').exec(masked)
+  if (latin && latin.index >= 0) return { index: latin.index }
+  const ja = JA_ASKS.map((cue) => masked.indexOf(cue)).filter((index) => index >= 0)
+  if (ja.length === 0) return null
+  return { index: Math.min(...ja) }
+}
+
+/** The listener-request sentence, or null when this utterance is not asking them. */
+export function askClause(text: string): string | null {
+  const found = findAsk(text)
+  if (!found) return null
+  const rest = text.slice(found.index)
+  const stop = rest.search(/[.!?。？\n]/u)
+  const clause = (stop === -1 ? rest : rest.slice(0, stop)).trim()
+  return clause || null
+}
+
 /** A request aimed at the listener. Agreement in the same utterance is owed to the speaker. */
 export function listenerAsk(text: string): 'ask' | 'owed' | 'none' {
-  const asked = ASK.test(text) || text.includes('もらえますか')
-  if (!asked) return 'none'
+  if (!findAsk(text)) return 'none'
   return AGREES.test(text) ? 'owed' : 'ask'
 }
 
 export function speakerPromises(text: string): boolean {
-  return SPEAKER_OWES.test(text)
+  return SPEAKER_OWES.test(text) || EXTRA_SPEAKER.test(text)
 }
 
 /**

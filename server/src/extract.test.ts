@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { loadEnvFiles, readEnv } from './env.js'
 import { ExtractError, cleanTitle, extractCommitment, type LlmClient } from './extract.js'
+import { listenerAsk } from './party.js'
 import { createLlmClient } from './providers.js'
 
 const TUESDAY = new Date('2026-11-24T03:00:00.000Z')
@@ -267,6 +268,162 @@ test('titles drop leftover date words and a leading I will', () => {
   assert.equal(cleanTitle('I will send the pricing', "I'll send the pricing"), 'send the pricing')
   assert.equal(cleanTitle('aku akan kirim proposal', 'aku akan kirim proposal'), 'kirim proposal')
   assert.equal(cleanTitle('el viernes', 'el viernes').length > 0, true)
+  assert.equal(cleanTitle('Preise an Lukas schicken bis Ende des Monats', 'bis Ende des Monats'), 'Preise an Lukas schicken')
+  assert.equal(
+    cleanTitle('Envoyer les tarifs à Julien la semaine prochaine', 'la semaine prochaine'),
+    'Envoyer les tarifs à Julien',
+  )
+  assert.equal(
+    cleanTitle('Akhir bulan Bayar tagihan listrik ke Andi', 'akhir bulan'),
+    'Bayar tagihan listrik ke Andi',
+  )
+})
+
+test('remind me is the speaker\'s own promise, not a request', async () => {
+  const result = await extractCommitment(
+    'Can you remind me to send the proposal tomorrow?',
+    fake({ isCommitment: true, title: 'send the proposal tomorrow', dueISO: null, confidence: 0.9, direction: 'I owe' }),
+    TUESDAY,
+  )
+  assert.equal(result.isCommitment, true)
+  assert.equal(result.direction, null)
+  assert.equal(result.person, null)
+  assert.equal(result.dueISO, '2026-11-25')
+  assert.equal(result.title, 'send the proposal')
+  for (const line of [
+    'could you remind me to call',
+    'bisa ingetin aku besok',
+    '¿me recuerdas llamar',
+    'erinnerst du mich morgen',
+    'tu peux me rappeler demain',
+    '思い出させて',
+    'si no puedes',
+    'cuando puedas',
+  ]) {
+    assert.equal(listenerAsk(line), 'none', line)
+  }
+})
+
+test('a bare puedes is not an ask, and the dialog request lines are not filed', async () => {
+  for (const line of ['quizá puedas mandármelas', 'tu pourras me les envoyer', '送ってもらえると助かります', 'boleh kirim']) {
+    const filed = await extractCommitment(
+      line,
+      fake({ isCommitment: true, title: line, dueISO: '2026-11-27', confidence: 0.9, direction: 'I owe' }),
+      TUESDAY,
+    )
+    assert.equal(filed.isCommitment, false, line)
+    assert.equal(filed.title, null, line)
+    assert.equal(filed.direction, null, line)
+  }
+})
+
+test('a promise next to a request is kept, and the request itself is not filed', async () => {
+  const dialogs = [
+    {
+      text: 'Thanks for the call. I will send the pricing to Sarah by Friday. If you happen to have those meeting notes, maybe you could send them sometime.',
+      due: '2026-11-27',
+      good: 'send the pricing to Sarah by Friday',
+      goodTitle: 'send the pricing to Sarah',
+      bad: 'maybe you could send them sometime',
+    },
+    {
+      text: 'El viernes le enviaré los precios a Carlos. Quizá puedas mandármelas si no puedes.',
+      due: '2026-11-27',
+      good: 'enviar los precios a Carlos el viernes',
+      goodTitle: 'enviar los precios a Carlos',
+      bad: 'quizá puedas mandármelas',
+    },
+    {
+      text: 'Ich schicke Lukas die Preise bis Ende des Monats. Könntest du sie mir irgendwann schicken?',
+      due: '2026-11-30',
+      good: 'Preise an Lukas schicken bis Ende des Monats',
+      goodTitle: 'Preise an Lukas schicken',
+      bad: 'Könntest du sie mir irgendwann schicken',
+    },
+    {
+      text: "La semaine prochaine, j'enverrai les tarifs à Julien. Tu pourras me les envoyer.",
+      due: '2026-12-01',
+      good: 'Envoyer les tarifs à Julien la semaine prochaine',
+      goodTitle: 'Envoyer les tarifs à Julien',
+      bad: 'tu pourras me les envoyer',
+    },
+    {
+      text: '今月末までに、田中さんに見積もりを送ります。送ってもらえると助かります。',
+      due: '2026-11-30',
+      good: '今月末までに田中さんに見積もりを送ります',
+      goodTitle: '田中さんに見積もりを送ります',
+      bad: '送ってもらえると助かります',
+    },
+    {
+      text: 'Akhir bulan aku bayar tagihan listrik ke Andi. Boleh kirim kapan-kapan.',
+      due: '2026-11-30',
+      good: 'Akhir bulan Bayar tagihan listrik ke Andi',
+      goodTitle: 'Bayar tagihan listrik ke Andi',
+      bad: 'boleh kirim kapan-kapan',
+    },
+    {
+      text: 'I will send the pricing to Sarah tomorrow. Maybe you could send the notes sometime.',
+      due: '2026-11-25',
+      good: 'send the pricing to Sarah tomorrow',
+      goodTitle: 'send the pricing to Sarah',
+      bad: 'maybe you could send the notes sometime',
+    },
+    {
+      text: 'Mañana le enviaré los precios a Carlos. Quizá puedas mandármelas.',
+      due: '2026-11-25',
+      good: 'Mañana enviar los precios a Carlos',
+      goodTitle: 'enviar los precios a Carlos',
+      bad: 'quizá puedas mandármelas',
+    },
+    {
+      text: 'Ich schicke Lukas die Preise morgen. Könntest du sie mir schicken?',
+      due: '2026-11-25',
+      good: 'Preise an Lukas schicken morgen',
+      goodTitle: 'Preise an Lukas schicken',
+      bad: 'Könntest du sie mir schicken',
+    },
+    {
+      text: "Demain j'enverrai les tarifs à Julien. Tu pourras me les envoyer.",
+      due: '2026-11-25',
+      good: 'Envoyer les tarifs à Julien demain',
+      goodTitle: 'Envoyer les tarifs à Julien',
+      bad: 'tu pourras me les envoyer',
+    },
+    {
+      text: '明日、田中さんに見積もりを送ります。送ってもらえると助かります。',
+      due: '2026-11-25',
+      good: '明日田中さんに見積もりを送ります',
+      goodTitle: '田中さんに見積もりを送ります',
+      bad: '送ってもらえると助かります',
+    },
+    {
+      text: 'Besok aku bayar tagihan listrik ke Andi. Boleh kirim.',
+      due: '2026-11-25',
+      good: 'Besok bayar tagihan listrik ke Andi',
+      goodTitle: 'bayar tagihan listrik ke Andi',
+      bad: 'boleh kirim',
+    },
+  ]
+  for (const dialog of dialogs) {
+    const kept = await extractCommitment(
+      dialog.text,
+      fake({ isCommitment: true, title: dialog.good, dueISO: null, confidence: 0.9, direction: 'I owe' }),
+      TUESDAY,
+    )
+    assert.equal(kept.isCommitment, true, dialog.text)
+    assert.equal(kept.dueISO, dialog.due, dialog.text)
+    assert.equal(kept.title, dialog.goodTitle, dialog.text)
+    assert.equal((kept.title ?? '').length > 0, true, dialog.text)
+
+    const filed = await extractCommitment(
+      dialog.text,
+      fake({ isCommitment: true, title: dialog.bad, dueISO: dialog.due, confidence: 0.9, direction: 'I owe' }),
+      TUESDAY,
+    )
+    assert.equal(filed.isCommitment, false, dialog.bad)
+    assert.equal(filed.title, null, dialog.bad)
+    assert.equal(filed.direction, null, dialog.bad)
+  }
 })
 
 test('empty text is a safe error and does not call the model', async () => {
