@@ -151,15 +151,18 @@ export function schemaProblems(properties: Record<string, SchemaProperty> | unde
     if (actual !== type) problems.push(`${name} should be ${type}`)
   }
   const direction = properties?.Direction
-  if (direction?.type !== 'select') {
-    problems.push('Direction should be select')
-  } else {
-    const names = new Set((direction.select?.options ?? []).map((option) => option.name))
-    for (const option of DIRECTION_OPTIONS) {
-      if (!names.has(option)) problems.push(`Direction should include ${option}`)
-    }
-  }
+  if (direction?.type !== 'select') problems.push('Direction should be select')
   return problems
+}
+
+/** Missing select labels are not fatal. Notion creates them when a row is written. */
+export function directionOptionWarnings(properties: Record<string, SchemaProperty> | undefined): string[] {
+  const direction = properties?.Direction
+  if (direction?.type !== 'select') return []
+  const names = new Set((direction.select?.options ?? []).map((option) => option.name))
+  return DIRECTION_OPTIONS.filter((option) => !names.has(option)).map(
+    (option) => `Direction select is missing ${option}; Notion creates missing select options on write`,
+  )
 }
 
 export class NotionClient {
@@ -194,6 +197,7 @@ export class NotionClient {
     if (problems.length) {
       throw new Error(`Notion data source schema does not match Keep — promises: ${problems.join('; ')}`)
     }
+    for (const warning of directionOptionWarnings(dataSource.properties)) console.warn(warning)
   }
 
   async queryOpen(): Promise<Task[]> {

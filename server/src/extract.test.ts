@@ -993,8 +993,47 @@ test('an owed english promise keeps an english title when the model translates i
   assert.equal(looksEnglish('Alex will fix it'), true)
   assert.equal(looksEnglish('Alex will pay me today'), true)
   assert.equal(looksEnglish('Jumat aku akan kirim sampel ke Budi'), false)
+  assert.equal(looksEnglish('Nadia will balas it'), false)
+  assert.equal(looksEnglish('Dia will kasih ke me'), false)
+  assert.equal(looksEnglish('Gue will transfer it ya'), false)
   assert.equal(indonesianLeak('Selesaikan invoice', 'tolong selesaikan invoice'), false)
   assert.equal(indonesianLeak('Selesaikan invoice', 'Alex will settle the invoice by Friday'), true)
+})
+
+test('casual talk and product names are not forced into a promise', async () => {
+  const casual = [
+    'I will check later',
+    "I'll check",
+    "I'll buy a coffee",
+    "I'll book a flight",
+    "I'll fix my hair",
+    "I'll finish my lunch",
+    "I'll share my screen",
+    'Alex will bring the kids',
+    'Alex will write',
+    'Maybe Alex will check it',
+    'If Alex will check it, fine',
+    'Alex will review the deck by Friday',
+    "I'll review the deck by Friday",
+  ]
+  for (const line of casual) {
+    const result = await extractCommitment(
+      line,
+      fake({ isCommitment: false, title: 'Do it', dueISO: '2026-11-27', confidence: 0.9, direction: 'I owe', person: 'Alex' }),
+      TUESDAY,
+    )
+    assert.equal(result.isCommitment, false, line)
+    assert.equal(result.title, null, line)
+  }
+
+  for (const line of ['Slack will message me', 'Zoom will email the link', 'Google will email me']) {
+    const result = await extractCommitment(
+      line,
+      fake({ isCommitment: true, title: 'Message me', dueISO: null, confidence: 0.9, direction: null, person: null }),
+      TUESDAY,
+    )
+    assert.equal(result.person, null, line)
+  }
 })
 
 test('every saved title starts with an uppercase letter', async () => {
