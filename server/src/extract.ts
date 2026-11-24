@@ -1,5 +1,5 @@
 import { dueLabel, hasDateCue, isValidISO, resolveDue, zonedISO } from './dates.js'
-import { cleanDirection, cleanPerson, inferParty, listenerAsk, speakerPromises } from './party.js'
+import { cleanDirection, cleanPerson, forcesCommitment, inferParty, listenerAsk, speakerPromises } from './party.js'
 import type { Direction, Extraction } from './types.js'
 
 export interface LlmClient {
@@ -110,6 +110,75 @@ function withoutLead(title: string): string {
 
 export function fallbackTitle(text: string): string {
   return sanitizeTitle(stripDateWords(withoutLead(normalizeUtterance(text))))
+}
+
+const INDONESIAN_UTTERANCE =
+  /\b(?:aku|saya|kamu|besok|kirim|bayar|kembalikan|mengembalikan|inget|ingetin|tolong|nanti|boleh|bisa)\b/i
+const ENGLISH_SPEAKER = /\b(?:i'll|i will|i'm going to|im going to|i promised)\b/i
+const INDONESIAN_TITLE =
+  /\b(?:jam|kembalikan|mengembalikan|kembali|bayar|inget|ingetin|besok|kirim|kirimkan|ingatkan|telepon|hubungi|mengirim|membayar|pengembalian)\b/i
+
+/** English promises stay English. An Indonesian utterance is left alone. */
+export function looksEnglish(text: string): boolean {
+  if (/[\u3040-\u30ff\u4e00-\u9fff]/.test(text)) return false
+  if (INDONESIAN_UTTERANCE.test(text)) return false
+  if (ENGLISH_SPEAKER.test(text)) return true
+  if (/\b(?:promised to|is going to)\b/i.test(text) && /\b(?:the|a|an|me|by|to)\b/i.test(text)) return true
+  return (
+    /\bwill\b/i.test(text) &&
+    /\b(?:the|a|an|by|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(text)
+  )
+}
+
+/** A title word counts only when the utterance itself did not already say it. */
+export function indonesianLeak(title: string, utterance = ''): boolean {
+  const spoken = new Set(utterance.toLowerCase().match(/\p{L}+/gu) ?? [])
+  for (const word of title.match(/\p{L}+/gu) ?? []) {
+    if (!INDONESIAN_TITLE.test(word) || spoken.has(word.toLowerCase())) continue
+    return true
+  }
+  return false
+}
+
+const SUBJECT_LEAD = /^(?:i'll|i will|i'm going to|im going to|i promised(?:\s+to)?)(?:\s+|$)/i
+const NAME_LEAD =
+  /^(?:\p{Lu}[\p{L}'’-]{0,40}\s+)(?:and\s+\p{Lu}[\p{L}'’-]{0,40}\s+)?(?:promised\s+to|is\s+going\s+to|will)(?:\s+|$)/u
+
+function bareLead(raw: string): string {
+  return stripDateWords(raw)
+    .replace(/[.!?]+$/g, '')
+    .trim()
+}
+
+function stripSubjectLead(raw: string): string {
+  let line = bareLead(raw)
+  for (let i = 0; i < 4; i += 1) {
+    const next = bareLead(line.replace(SUBJECT_LEAD, '').replace(NAME_LEAD, ''))
+    if (next === line) break
+    line = next
+  }
+  return line.trim()
+}
+
+function hadSubjectLead(raw: string): boolean {
+  const line = bareLead(raw)
+  return SUBJECT_LEAD.test(line) || NAME_LEAD.test(line)
+}
+
+/** A stable English title from the utterance, used when the model translates it. */
+export function englishPromiseTitle(text: string): string {
+  const line = stripSubjectLead(normalizeUtterance(text))
+  const title = sanitizeTitle(line)
+  if (!title) return ''
+  return title.charAt(0).toUpperCase() + title.slice(1)
+}
+
+/** Drop a leading "Alex will" or "I'll" from an English model title. */
+export function presentEnglishTitle(raw: string, utterance: string): string {
+  if (!hadSubjectLead(raw)) return cleanTitle(raw, utterance)
+  const title = sanitizeTitle(stripSubjectLead(raw))
+  if (!title) return ''
+  return title.charAt(0).toUpperCase() + title.slice(1)
 }
 
 function fold(text: string): string {
@@ -266,11 +335,12 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
     `Today is ${today}. The timezone is ${timeZone}.`,
     'Return only a JSON object with keys isCommitment (boolean), title (string), dueISO (YYYY-MM-DD or null), confidence (number from 0 to 1), person (string or null), direction ("I owe", "Owed to me", or null).',
     'person is the other named person, never I, me, aku, or saya. Use null when nobody else is named.',
-    'direction is "I owe" when the speaker promises to send, pay, review, call, or deliver for someone else, even if that person is unnamed.',
-    'direction is "Owed to me" when someone else promised the speaker.',
+    'direction is "I owe" when the speaker promises to send, pay, review, call, deliver, or remind someone, even if that person is unnamed. "I\'ll", "I will", and "I promised" are "I owe".',
+    'direction is "Owed to me" when someone else promised the speaker. When a named person promised to, will, or is going to do something, including "pay me back", person is that name and direction is "Owed to me".',
     'direction is null for a personal task with no counterparty, such as booking your own flight or reviewing your own deck.',
-    'Keep the title in the utterance language. Do not translate it. Keep a person name in the title when the speaker said it.',
-    'isCommitment is true only when the speaker promised to do something (send, call, review, remind me, I will, aku akan, saya akan).',
+    'Write the title in the same language as the utterance, even when it mixes languages. Never translate English into Indonesian or the reverse.',
+    'Keep a person name in the title when the speaker said it.',
+    'isCommitment is true when the speaker promised to do something (send, call, review, remind me, I will, I\'ll, aku akan, saya akan). It is also true when a named person promised to, will, or is going to do something: that commitment is owed to the speaker.',
     'A request aimed at the listener is not the speaker\'s promise. could you, can you, maybe you could, would you, bisa tolong, kamu bisa, boleh kirim, ¿puedes, puedes enviarme, podrías, quizá puedas, könntest du, tu pourrais, tu pourras, もらえますか, and 送ってもらえる are asks.',
     'Bare "puedes" or "puedas" (si no puedes, cuando puedas) is not a request. can you remind me, bisa ingetin aku, me recuerdas, erinnerst du mich, tu peux me rappeler, and 思い出させて are the speaker\'s own reminder.',
     'If the speaker also promises something in the same utterance, title is that promise, not the request. Do not drop the promise because a request is also present.',
@@ -279,11 +349,42 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
     'person is the named counterparty of the promise. Ignore "thanks for" and words ending in -ing, such as hopping.',
     'title is a short display line, at most 40 characters, no trailing period.',
     'Do not put the due date, weekday, or relative day in the title. Drop words such as by Friday, tomorrow, besok, Jumat depan, end of month, and in 3 days.',
-    'Keep a clock time in the title when the speaker says one, such as at 9 or jam 5.',
+    'Keep a clock time in the title when the speaker says one, such as at 9 or 5pm.',
     'dueISO is a calendar date in that timezone. If the utterance has no date, dueISO must be null.',
     'Never guess or invent a date. Never return a date before today. If you are unsure, use null.',
     'Resolve by Friday, tomorrow, besok, Jumat, next week, end of month, in N days, and a clock time against today.',
   ].join('\n')
+}
+
+function strictEnglishSystem(now: Date, timeZone: string): string {
+  return [
+    buildExtractSystem(now, timeZone),
+    'The utterance is English. Write the title in English only.',
+    'Never translate English into Indonesian. Do not use jam, kembalikan, bayar, inget, besok, or kirim in the title.',
+  ].join('\n')
+}
+
+async function recoverEnglishTitle(
+  utterance: string,
+  llm: LlmClient,
+  now: Date,
+  timeZone: string,
+): Promise<string> {
+  try {
+    const raw = await llm.complete(strictEnglishSystem(now, timeZone), utterance)
+    const again = parseModelJson(raw)
+    const cleaned = cleanTitle(again.title, utterance)
+    if (again.isCommitment && cleaned && !indonesianLeak(cleaned, utterance)) return cleaned
+  } catch {
+    // The retry did not return an English title.
+  }
+  return englishPromiseTitle(utterance)
+}
+
+function mentionedPerson(person: string | null, text: string): string | null {
+  if (!person || !/^\p{Lu}/u.test(person)) return null
+  const escaped = person.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`${EDGE}${escaped}${END}`, 'u').test(text) ? person : null
 }
 
 export async function extractCommitment(
@@ -318,11 +419,22 @@ export async function extractCommitment(
     sourceUtterance = sentence
   }
   const owed = ask === 'owed' && !speakerPromises(utterance)
-  if (!model.isCommitment && !owed) {
+  const party = inferParty(utterance)
+  const forced = forcesCommitment(utterance)
+  if (!model.isCommitment && !owed && !forced) {
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
 
-  const title = cleanTitle(sourceTitle, sourceUtterance)
+  let title = cleanTitle(sourceTitle, sourceUtterance)
+  const usedPromiseSentence = sourceUtterance !== utterance
+  if (looksEnglish(utterance) && indonesianLeak(title, utterance)) {
+    title = await recoverEnglishTitle(sourceUtterance, llm, now, timeZone)
+  } else if (!usedPromiseSentence && (looksEnglish(utterance) || hadSubjectLead(sourceTitle))) {
+    title = presentEnglishTitle(sourceTitle, sourceUtterance)
+  }
+  if (!title || (hadSubjectLead(sourceTitle) && !sanitizeTitle(stripSubjectLead(sourceTitle)))) {
+    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
+  }
   const today = zonedISO(now, timeZone)
   const localDue = resolveDue(utterance, now, timeZone)
   let dueISO: string | null = localDue && localDue >= today ? localDue : null
@@ -331,7 +443,6 @@ export async function extractCommitment(
   }
   if (!hasDateCue(utterance)) dueISO = null
   if (model.confidence < 0.5) dueISO = null
-  const party = inferParty(utterance)
 
   return {
     isCommitment: true,
@@ -339,7 +450,7 @@ export async function extractCommitment(
     dueISO,
     dueLabel: dueLabel(dueISO, now, timeZone),
     confidence: model.confidence,
-    person: party.locked ? party.person : model.person,
+    person: party.locked ? party.person : mentionedPerson(model.person, utterance),
     direction: owed ? 'Owed to me' : party.locked ? party.direction : model.direction,
   }
 }

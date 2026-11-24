@@ -20,6 +20,11 @@ const NOT_PERSON = new Set([
   'he',
   'she',
   'they',
+  'it',
+  'this',
+  'that',
+  'there',
+  'we',
   'you',
   'kamu',
   'dia',
@@ -48,17 +53,19 @@ const NAME = String.raw`[\p{L}][\p{L}'’-]{0,40}`
 const EDGE = String.raw`(?<![\p{L}\p{N}_])`
 const END = String.raw`(?![\p{L}\p{N}_])`
 
+const PROPER = String.raw`\p{Lu}[\p{L}'’-]{0,40}`
 const OWED = [
-  new RegExp(`${EDGE}(${NAME})\\s+said\\s+(?:he|she|they)'?ll\\b`, 'iu'),
-  new RegExp(`${EDGE}(${NAME})\\s+will\\s+(?:send|pay|call|review|deliver|kirim|bayar)${END}`, 'iu'),
-  new RegExp(`${EDGE}(${NAME})\\s+(?:bilang|berkata)${END}`, 'iu'),
+  new RegExp(`${EDGE}(${PROPER})\\s+said\\s+(?:he|she|they)'?ll\\b`, 'giu'),
+  new RegExp(`${EDGE}(${PROPER})\\s+will\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar)${END}`, 'giu'),
+  // No i flag: the name has to be capitalised, so "the meeting is going to" is not a person.
+  new RegExp(`${EDGE}(${PROPER})\\s+(?:promised\\s+to|is\\s+going\\s+to)\\s+`, 'gu'),
+  new RegExp(`${EDGE}(${PROPER})\\s+(?:bilang|berkata)${END}`, 'giu'),
 ]
 
 const SPEAKER_OWES = new RegExp(
-  `${EDGE}(?:i'll|i will|i'm going to|im going to|aku akan|saya akan|aku|saya)\\s+(?:send|pay|call|review|deliver|kirim|bayar|telepon|menelpon)${END}`,
+  `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?|aku akan|saya akan|aku|saya)\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar|telepon|menelpon)${END}`,
   'iu',
 )
-
 const PERSONAL = new RegExp(`${EDGE}(?:i need to|i have to|remind me to|jangan lupa|don't forget to)${END}`, 'iu')
 const VERB = new RegExp(
   `${EDGE}(?:send|pay|call|review|deliver|kirim|bayar|telepon|menelpon)${END}`,
@@ -159,6 +166,57 @@ function namedCounterparty(text: string): string | null {
   return best.name
 }
 
+const PRODUCTS = new Set(['notion', 'slack', 'zoom', 'google', 'pdf'])
+
+/** A capitalised person, not a product, an acronym, or a single letter. */
+function objectName(token: string | undefined): string | null {
+  if (!token || token.length < 2) return null
+  if (/^\p{Lu}+$/u.test(token)) return null
+  if (PRODUCTS.has(token.toLowerCase())) return null
+  if (!/^\p{Lu}/u.test(token)) return null
+  return cleanPerson(token)
+}
+
+/**
+ * The other person the speaker names. "for/to Nadia" still counts. Otherwise
+ * only the word directly after call, pay, remind, send, and the other person verbs.
+ */
+function speakerPerson(text: string): string | null {
+  const named = namedCounterparty(text)
+  if (named && !PRODUCTS.has(named.toLowerCase())) return named
+  const promised = text.match(new RegExp(`${EDGE}i\\s+promised\\s+(\\p{L}[\\p{L}'’-]*)`, 'iu'))
+  const fromPromise = objectName(promised?.[1])
+  if (fromPromise) return fromPromise
+  const match = text.match(
+    new RegExp(
+      `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)\\s+(?:pay\\s+back|call|pay|remind|send|tell|email|text|message|ping|meet)\\s+(\\p{L}[\\p{L}'’-]*)`,
+      'iu',
+    ),
+  )
+  return objectName(match?.[1])
+}
+
+function speakerLeadIndex(text: string): number {
+  const match = new RegExp(`${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)`, 'iu').exec(text)
+  return match?.index ?? -1
+}
+
+function firstOwed(text: string): { person: string; index: number } | null {
+  let best: { person: string; index: number } | null = null
+  for (const pattern of OWED) {
+    pattern.lastIndex = 0
+    for (const match of text.matchAll(pattern)) {
+      const raw = match[1]
+      if (!raw || !/^\p{Lu}/u.test(raw)) continue
+      const person = cleanPerson(raw)
+      if (!person) continue
+      const index = match.index ?? 0
+      if (!best || index < best.index) best = { person, index }
+    }
+  }
+  return best
+}
+
 const REMIND = [
   `${EDGE}(?:can|could|would)\\s+you\\s+remind\\s+me${END}`,
   `${EDGE}bisa\\s+ingetin\\s+aku${END}`,
@@ -210,18 +268,45 @@ export function speakerPromises(text: string): boolean {
   return SPEAKER_OWES.test(text) || EXTRA_SPEAKER.test(text) || japaneseSpeakerPromise(text)
 }
 
+const ACTION = 'pay\\s+back|send|pay|call|remind|return|email|text|message|deliver|share|finish|submit'
+
+/**
+ * True only for a real owed promise or an I'll plus an action verb.
+ * "I'll think about it" is not enough to override the model.
+ */
+export function forcesCommitment(text: string): boolean {
+  const speakerAt = speakerLeadIndex(text)
+  const owed = firstOwed(text)
+  if (owed && (speakerAt < 0 || owed.index < speakerAt)) {
+    const tail = text.slice(owed.index)
+    const owedAction = new RegExp(
+      `^${PROPER}\\s+(?:will\\s+(?:${ACTION})|(?:promised\\s+to|is\\s+going\\s+to)\\s+(?:${ACTION}))${END}`,
+      'u',
+    )
+    if (owedAction.test(tail)) return true
+  }
+  const speakerAction = new RegExp(
+    `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)\\s+(?:${ACTION})${END}`,
+    'iu',
+  )
+  return speakerAction.test(text)
+}
+
 /**
  * Locked means the utterance itself decides the party, so a model guess cannot
  * invent a person or a direction for these shapes.
  */
 export function inferParty(text: string): { person: string | null; direction: Direction | null; locked: boolean } {
-  for (const pattern of OWED) {
-    const match = text.match(pattern)
-    const person = cleanPerson(match?.[1])
-    if (person) return { person, direction: 'Owed to me', locked: true }
+  const speakerAt = speakerLeadIndex(text)
+  const owed = firstOwed(text)
+  if (owed && (speakerAt < 0 || owed.index < speakerAt)) {
+    return { person: owed.person, direction: 'Owed to me', locked: true }
   }
-  if (SPEAKER_OWES.test(text)) {
-    return { person: namedCounterparty(text), direction: 'I owe', locked: true }
+  if (speakerAt >= 0 || SPEAKER_OWES.test(text)) {
+    if (/\b(?:my own|myself)\b/i.test(text) && !namedCounterparty(text)) {
+      return { person: null, direction: null, locked: true }
+    }
+    return { person: speakerAt >= 0 ? speakerPerson(text) : namedCounterparty(text), direction: 'I owe', locked: true }
   }
   if (PERSONAL.test(text) && !namedCounterparty(text)) {
     return { person: null, direction: null, locked: true }
