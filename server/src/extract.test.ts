@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { loadEnvFiles, readEnv } from './env.js'
-import { ExtractError, extractCommitment, type LlmClient } from './extract.js'
+import { ExtractError, cleanTitle, extractCommitment, type LlmClient } from './extract.js'
 import { createLlmClient } from './providers.js'
 
 const TUESDAY = new Date('2026-11-24T03:00:00.000Z')
@@ -24,6 +24,8 @@ test('Friday commitment resolves to the coming Friday and a short title', async 
   assert.equal(result.isCommitment, true)
   assert.equal(result.dueISO, '2026-11-27')
   assert.equal(result.dueLabel, 'FRI 27 NOV')
+  assert.equal(result.direction, 'I owe')
+  assert.equal(result.person, null)
   assert.equal(typeof result.title, 'string')
   if (!result.title) return
   assert.match(result.title, /pricing/i)
@@ -63,6 +65,8 @@ test('small talk is not a commitment and does not invent a date', async () => {
     assert.equal(result.title, null)
     assert.equal(result.confidence, 0)
     assert.equal(result.dueISO, null)
+    assert.equal(result.person, null)
+    assert.equal(result.direction, null)
     assert.equal(calls.length, 0)
   }
 })
@@ -145,6 +149,63 @@ test('the model saying it is not a promise returns a null title', async () => {
   assert.equal(result.title, null)
   assert.equal(result.confidence, 0)
   assert.equal(result.dueISO, null)
+})
+
+test('someone else promising is owed to me, and a named recipient is I owe', async () => {
+  const owed = await extractCommitment(
+    "Budi said he'll pay the invoice Friday",
+    fake({ isCommitment: true, title: 'Budi pay the invoice', dueISO: null, confidence: 0.9, person: null, direction: null }),
+    TUESDAY,
+  )
+  assert.equal(owed.direction, 'Owed to me')
+  assert.equal(owed.person, 'Budi')
+  assert.equal(owed.dueISO, '2026-11-27')
+
+  const mine = await extractCommitment(
+    'besok aku kirim proposal ke Sari',
+    fake({ isCommitment: true, title: 'kirim proposal ke Sari', dueISO: null, confidence: 0.9 }),
+    TUESDAY,
+  )
+  assert.equal(mine.direction, 'I owe')
+  assert.equal(mine.person, 'Sari')
+  assert.equal(mine.dueISO, '2026-11-25')
+  assert.match(mine.title ?? '', /proposal/)
+  assert.match(mine.title ?? '', /Sari/)
+  assert.equal((mine.title ?? '').toLowerCase().includes('besok'), false)
+})
+
+test('a personal task does not invent a person or a direction', async () => {
+  const result = await extractCommitment(
+    'I need to book the flight',
+    fake({ isCommitment: true, title: 'book the flight', dueISO: null, confidence: 0.9, person: 'Flight', direction: 'I owe' }),
+    TUESDAY,
+  )
+  assert.equal(result.isCommitment, true)
+  assert.equal(result.person, null)
+  assert.equal(result.direction, null)
+})
+
+test('titles stay in the spoken language and drop the new date words', async () => {
+  const spanish = await extractCommitment(
+    'Mañana envío la propuesta',
+    fake({ isCommitment: true, title: 'envío la propuesta mañana', dueISO: null, confidence: 0.9 }),
+    TUESDAY,
+  )
+  assert.equal(spanish.dueISO, '2026-11-25')
+  assert.equal(spanish.title, 'envío la propuesta')
+  assert.equal(spanish.person, null)
+  assert.equal(spanish.direction, null)
+
+  const japanese = await extractCommitment(
+    '明日提案を送る',
+    fake({ isCommitment: true, title: '提案を送る 金曜日', dueISO: null, confidence: 0.9 }),
+    TUESDAY,
+  )
+  assert.equal(japanese.dueISO, '2026-11-25')
+  assert.equal(japanese.title, '提案を送る')
+  assert.equal(cleanTitle('Friday', 'Friday').length > 0, true)
+  assert.equal(cleanTitle('envoyer à 17h', 'envoyer à 17h'), 'envoyer à 17h')
+  assert.equal(cleanTitle('Call María', 'Call María'), 'Call María')
 })
 
 test('empty text is a safe error and does not call the model', async () => {

@@ -9,12 +9,18 @@ import { ExtractError, extractCommitment, normalizeUtterance, type LlmClient } f
 import type { Env } from './env.js'
 import { correctTranscript } from './stt-correct.js'
 import { ensureWav, MAX_PCM_BYTES } from './wav.js'
-import type { Extraction, Task } from './types.js'
+import type { Direction, Extraction, Task } from './types.js'
 
 export interface NotionOps {
   queryOpen(): Promise<Task[]>
   queryWeek(start: string, end: string): Promise<Task[]>
-  create(input: { title: string; dueISO: string | null; transcript: string }): Promise<{ notionPageId: string; url: string }>
+  create(input: {
+    title: string
+    dueISO: string | null
+    transcript: string
+    person: string | null
+    direction: Direction | null
+  }): Promise<{ notionPageId: string; url: string }>
   setDone(id: string, done: boolean): Promise<void>
   trash(id: string): Promise<void>
 }
@@ -161,9 +167,18 @@ export function createApp(deps: AppDeps) {
   app.get('/tasks', async (c) => {
     const scope = c.req.query('scope') ?? 'open'
     if (scope !== 'open') return c.json({ error: 'scope must be open' }, 400)
+    const directionQuery = c.req.query('direction')
+    let direction: Direction | undefined
+    if (directionQuery !== undefined) {
+      if (directionQuery !== 'I owe' && directionQuery !== 'Owed to me') {
+        return c.json({ error: 'direction must be I owe or Owed to me' }, 400)
+      }
+      direction = directionQuery
+    }
     try {
       const tasks = await deps.notion.queryOpen()
-      return c.json(tasks)
+      const filtered = direction ? tasks.filter((task) => task.direction === direction) : tasks
+      return c.json(filtered)
     } catch (err) {
       return c.json({ error: publicError(err, 'Could not read Notion') }, 503)
     }
@@ -222,6 +237,8 @@ export function createApp(deps: AppDeps) {
     const title = typeof body.title === 'string' ? body.title : ''
     const dueISO = typeof body.dueISO === 'string' && body.dueISO ? body.dueISO : null
     const confirmToken = typeof body.confirmToken === 'string' ? body.confirmToken : ''
+    const sentPerson = partyField(body, 'person')
+    const sentDirection = partyField(body, 'direction')
     const consumed = confirms.consume(confirmToken, title, dueISO, now().getTime())
     if (!consumed.ok) {
       if (consumed.reason === 'expired') return c.json({ error: 'Expired. Speak again.', code: 'expired' }, 409)
@@ -231,8 +248,22 @@ export function createApp(deps: AppDeps) {
         409,
       )
     }
+    if (sentPerson.present && sentPerson.value !== consumed.record.person) {
+      confirms.restore(confirmToken, consumed.record, now().getTime())
+      return c.json({ error: 'Confirm token is missing, expired, or does not match this promise', code: 'mismatch' }, 409)
+    }
+    if (sentDirection.present && sentDirection.value !== consumed.record.direction) {
+      confirms.restore(confirmToken, consumed.record, now().getTime())
+      return c.json({ error: 'Confirm token is missing, expired, or does not match this promise', code: 'mismatch' }, 409)
+    }
     try {
-      const created = await deps.notion.create({ title, dueISO, transcript: consumed.record.transcript })
+      const created = await deps.notion.create({
+        title,
+        dueISO,
+        transcript: consumed.record.transcript,
+        person: consumed.record.person,
+        direction: consumed.record.direction,
+      })
       const at = now().getTime()
       confirms.remember(confirmToken, at)
       const session = bearerToken(c.req.header('authorization')) ?? ''
@@ -301,6 +332,8 @@ export function createApp(deps: AppDeps) {
         dueISO: extraction.dueISO,
         transcript,
         isCommitment: extraction.isCommitment,
+        person: extraction.person,
+        direction: extraction.direction,
       },
       now().getTime(),
     )
@@ -328,6 +361,18 @@ async function readJson(c: Context): Promise<Record<string, unknown>> {
   } catch {
     return {}
   }
+}
+
+function partyField(
+  body: Record<string, unknown>,
+  key: 'person' | 'direction',
+): { present: boolean; value: string | null } {
+  if (!(key in body)) return { present: false, value: null }
+  const raw = body[key]
+  if (raw === null) return { present: true, value: null }
+  if (typeof raw !== 'string') return { present: true, value: '\u0000' }
+  const value = raw.trim()
+  return { present: true, value: value || null }
 }
 
 function extractionError(c: Context, err: unknown) {

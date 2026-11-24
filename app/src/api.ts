@@ -11,12 +11,16 @@ export class ApiError extends Error {
   }
 }
 
+export type Direction = 'I owe' | 'Owed to me'
+
 export type Task = {
   id: string
   title: string
   due: string | null
   dueLabel: string
   done: boolean
+  person: string | null
+  direction: Direction | null
 }
 
 export type Extraction = {
@@ -27,6 +31,8 @@ export type Extraction = {
   dueLabel: string
   confidence: number
   confirmToken: string
+  person: string | null
+  direction: Direction | null
 }
 
 type RequestInitJson = {

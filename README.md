@@ -122,6 +122,10 @@ Double-press on the root calls `shutDownPageContainer(1)`, which is the system e
 
 One utterance files one promise. A second promise in the same sentence is ignored. The open list shows at most 20 rows. Dates the model invents in the past are dropped. The idle line `2 DUE TODAY  1 LATE` and `KEPT 8/10 THIS WEEK` use Asia/Jakarta. The week is Monday through Sunday. If the week query fails, that line is hidden. If the open list cannot refresh, idle shows `offline` and keeps the last snapshot.
 
+Person and Direction are optional on an existing Keep — promises row. Direction is exactly `I owe` or `Owed to me`. The glasses show `I OWE` and `OWED TO ME`. When an open `I owe` promise exists, idle shows that debt instead of the generic next-due line.
+
+Spanish, German, French, and Japanese dates (tomorrow, weekdays, next week, end of month, in N days or weeks, and a clock time) are parsed in Asia/Jakarta and saved. Japanese text is sent to the display as UTF-8. CJK glyphs may not render on the G1/G2 display. The app does not crash, and list rows stay clipped at 63 UTF-8 bytes.
+
 ## Tests
 
 ```bash

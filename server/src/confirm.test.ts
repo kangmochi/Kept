@@ -2,7 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { CONFIRM_TTL_MS, ConfirmStore } from './confirm.js'
 
-const record = { title: 'send pricing', dueISO: '2026-11-27', transcript: 'by Friday', isCommitment: true }
+const record = {
+  title: 'send pricing',
+  dueISO: '2026-11-27',
+  transcript: 'by Friday',
+  isCommitment: true,
+  person: null,
+  direction: null,
+}
 
 test('a confirm token lasts 10 minutes and a mismatch does not consume it', () => {
   const store = new ConfirmStore()

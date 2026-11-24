@@ -90,6 +90,61 @@ test('parses a page and sorts empty dates last', () => {
   )
 })
 
+test('person and direction are optional on the page body and round-trip from a page', () => {
+  const omitted = createPageBody({
+    dataSourceId: 'source-id',
+    title: 'send pricing',
+    dueISO: '2026-11-27',
+    transcript: 'by Friday',
+    person: null,
+    direction: null,
+  })
+  assert.equal('Person' in omitted.properties, false)
+  assert.equal('Direction' in omitted.properties, false)
+  const filled = createPageBody({
+    dataSourceId: 'source-id',
+    title: 'kirim proposal',
+    dueISO: '2026-11-25',
+    transcript: 'ke Sari',
+    person: 'Sari',
+    direction: 'I owe',
+  })
+  const person = (filled.properties.Person as { rich_text: { text: { content: string } }[] }).rich_text[0].text.content
+  const direction = (filled.properties.Direction as { select: { name: string } }).select.name
+  assert.equal(person, 'Sari')
+  assert.equal(direction, 'I owe')
+  const now = new Date('2026-11-24T03:00:00.000Z')
+  const task = pageToTask(
+    {
+      id: 'page-c',
+      properties: {
+        Name: { title: [{ plain_text: 'kirim proposal' }] },
+        Person: { rich_text: [{ plain_text: 'Sari' }] },
+        Direction: { select: { name: 'I owe' } },
+        Done: { checkbox: false },
+      },
+    },
+    now,
+    'Asia/Jakarta',
+  )
+  assert.equal(task?.person, 'Sari')
+  assert.equal(task?.direction, 'I owe')
+  const unknown = pageToTask(
+    {
+      id: 'page-d',
+      properties: {
+        Name: { title: [{ plain_text: 'book flight' }] },
+        Direction: { select: { name: 'Maybe' } },
+        Done: { checkbox: false },
+      },
+    },
+    now,
+    'Asia/Jakarta',
+  )
+  assert.equal(unknown?.person, null)
+  assert.equal(unknown?.direction, null)
+})
+
 test('week query, done, and trash bodies match the Notion API', () => {
   const week = weekQueryBody('2026-11-23', '2026-11-29')
   assert.deepEqual(week.filter.and[0], { property: 'Due', date: { on_or_after: '2026-11-23' } })

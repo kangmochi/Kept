@@ -13,6 +13,7 @@ import {
   listItem,
   listeningCopy,
   pairExpiredCopy,
+  promiseList,
   savedCopy,
   utf8Bytes,
 } from './copy.ts'
@@ -25,6 +26,8 @@ const extraction = {
   dueLabel: 'FRI 27 NOV',
   confidence: 0.9,
   confirmToken: 'token',
+  person: null,
+  direction: null,
 } satisfies Extraction
 
 test('confirm copy drops the owner line and listening can be stopped', () => {
@@ -57,9 +60,9 @@ test('idle counts today and late promises and hides a zero line', () => {
   const today = '2026-11-24'
   assert.equal(jakartaToday(new Date('2026-11-24T03:00:00.000Z')), today)
   const tasks: Task[] = [
-    { id: 'a', title: 'late one', due: '2026-11-20', dueLabel: 'FRI 20 NOV', done: false },
-    { id: 'b', title: 'today one', due: today, dueLabel: 'TODAY', done: false },
-    { id: 'c', title: 'today two', due: today, dueLabel: 'TODAY', done: false },
+    { id: 'a', title: 'late one', due: '2026-11-20', dueLabel: 'FRI 20 NOV', done: false, person: null, direction: null },
+    { id: 'b', title: 'today one', due: today, dueLabel: 'TODAY', done: false, person: null, direction: null },
+    { id: 'c', title: 'today two', due: today, dueLabel: 'TODAY', done: false, person: null, direction: null },
   ]
   assert.deepEqual(dueCounts(tasks, today), { today: 2, late: 1 })
   const shown = idleCopy(tasks, { today, week: { kept: 8, total: 10 } })
@@ -69,6 +72,49 @@ test('idle counts today and late promises and hides a zero line', () => {
   assert.equal(quiet.includes('DUE TODAY'), false)
   assert.equal(quiet.includes('THIS WEEK'), false)
   assert.match(idleCopy(tasks, { today, offline: true }), /offline/)
+})
+
+test('confirm copy names the person and direction', () => {
+  const owe = confirmCopy({ ...extraction, person: 'Sari', direction: 'I owe' })
+  assert.match(owe, /FOR SARI · I OWE/)
+  const owed = confirmCopy({ ...extraction, person: 'Budi', direction: 'Owed to me' })
+  assert.match(owed, /FOR BUDI · OWED TO ME/)
+  const unnamed = confirmCopy({ ...extraction, person: null, direction: 'I owe' })
+  assert.match(unnamed, /^I OWE$/m)
+  assert.equal(unnamed.includes('FOR '), false)
+  const plain = confirmCopy(extraction)
+  assert.equal(plain.includes('I OWE'), false)
+  assert.equal(plain.includes('OWED TO ME'), false)
+  assert.equal(plain.split('\n').length, 4)
+  const check = checkCopy({ ...extraction, confidence: 0.2, person: 'Sari', direction: 'I owe' })
+  assert.match(check, /CHECK THIS\?/)
+  assert.match(check, /FOR SARI · I OWE/)
+  assert.match(check, /DUE  ----/)
+})
+
+test('idle prefers the most urgent debt and the list splits by direction', () => {
+  const today = '2026-11-24'
+  const tasks: Task[] = [
+    { id: 'late', title: 'old deck', due: '2026-11-20', dueLabel: 'FRI 20 NOV', done: false, person: 'Sari', direction: 'I owe' },
+    { id: 'soon', title: 'send pricing', due: '2026-11-27', dueLabel: 'FRI 27 NOV', done: false, person: null, direction: 'I owe' },
+    { id: 'budi', title: 'pay invoice', due: '2026-11-27', dueLabel: 'FRI 27 NOV', done: false, person: 'Budi', direction: 'Owed to me' },
+    { id: 'self', title: 'book flight', due: '2026-11-24', dueLabel: 'TODAY', done: false, person: null, direction: null },
+  ]
+  const idle = idleCopy(tasks, { today, offline: true, week: { kept: 8, total: 10 } })
+  assert.match(idle, /I OWE SARI · FRI 20 NOV/)
+  assert.match(idle, /KEPT 8\/10 THIS WEEK/)
+  assert.match(idle, /offline/)
+  assert.match(idle, /\[press\] listen  \[swipe\] list/)
+  assert.equal(idle.includes('next due:'), false)
+  const listed = promiseList(tasks)
+  assert.equal(listed.rows[0], 'I OWE · 2')
+  assert.match(listed.rows[1] ?? '', /old deck/)
+  assert.ok(listed.rows.includes('OWED TO ME · 1'))
+  assert.ok(listed.rows.includes('OTHER · 1'))
+  assert.equal(listed.tasks[0], null)
+  const onlyDebt = promiseList(tasks.filter((task) => task.direction === 'I owe'))
+  assert.equal(onlyDebt.rows.some((row) => row.startsWith('OTHER')), false)
+  assert.equal(onlyDebt.rows.some((row) => row.startsWith('OWED')), false)
 })
 
 test('error copy is a short complete sentence', () => {

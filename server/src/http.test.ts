@@ -33,7 +33,7 @@ function env(overrides: Partial<Env> = {}): Env {
 
 class MemoryNotion implements NotionOps {
   tasks: Task[] = [
-    { id: 'page-1', title: 'seeded row', due: '2026-11-24', dueLabel: 'TODAY', done: false },
+    { id: 'page-1', title: 'seeded row', due: '2026-11-24', dueLabel: 'TODAY', done: false, person: null, direction: null },
   ]
   lastTranscript = ''
   trashed = new Set<string>()
@@ -46,14 +46,21 @@ class MemoryNotion implements NotionOps {
     return this.tasks.filter((task) => task.due && task.due >= start && task.due <= end && !this.trashed.has(task.id))
   }
 
-  async create(input: { title: string; dueISO: string | null; transcript: string }) {
+  lastPerson: string | null = null
+  lastDirection: Task['direction'] = null
+
+  async create(input: { title: string; dueISO: string | null; transcript: string; person: string | null; direction: Task['direction'] }) {
     this.lastTranscript = input.transcript
+    this.lastPerson = input.person
+    this.lastDirection = input.direction
     const task: Task = {
       id: `page-${this.tasks.length + 1}`,
       title: input.title,
       due: input.dueISO,
       dueLabel: input.dueISO ? 'DUE' : '----',
       done: false,
+      person: input.person,
+      direction: input.direction,
     }
     this.tasks.push(task)
     return { notionPageId: task.id, url: 'https://www.notion.so/kept-example' }
@@ -431,6 +438,57 @@ test('listen corrects info C to invoice before the glasses extract it', async ()
     }),
   )
   assert.equal(heard.text, 'Bayar invoice besok')
+})
+
+test('direction filters the open list and a save writes the sealed party', async () => {
+  const notion = new MemoryNotion()
+  notion.tasks = [
+    { id: 'owe', title: 'send pricing', due: '2026-11-27', dueLabel: 'FRI 27 NOV', done: false, person: null, direction: 'I owe' },
+    { id: 'owed', title: 'pay invoice', due: '2026-11-27', dueLabel: 'FRI 27 NOV', done: false, person: 'Budi', direction: 'Owed to me' },
+    { id: 'self', title: 'book flight', due: null, dueLabel: '----', done: false, person: null, direction: null },
+  ]
+  const { app } = build({ notion })
+  const token = issueSession(SECRET, TUESDAY.getTime())
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+  const owe = (await (await app.request('http://localhost/tasks?scope=open&direction=I%20owe', { headers })).json()) as Task[]
+  assert.deepEqual(owe.map((task) => task.id), ['owe'])
+  const owed = (await (await app.request('http://localhost/tasks?scope=open&direction=Owed%20to%20me', { headers })).json()) as Task[]
+  assert.deepEqual(owed.map((task) => task.id), ['owed'])
+  const all = (await (await app.request('http://localhost/tasks?scope=open', { headers })).json()) as Task[]
+  assert.equal(all.length, 3)
+  const bad = await app.request('http://localhost/tasks?direction=', { headers })
+  assert.equal(bad.status, 400)
+  const worse = await app.request('http://localhost/tasks?direction=nope', { headers })
+  assert.equal(worse.status, 400)
+
+  const extracted = await json(
+    await app.request('http://localhost/extract', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ text: "I'll send the pricing by Friday" }),
+    }),
+  )
+  assert.equal(extracted.direction, 'I owe')
+  assert.equal(extracted.person, null)
+  const mismatch = await app.request('http://localhost/tasks', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: extracted.title,
+      dueISO: extracted.dueISO,
+      confirmToken: extracted.confirmToken,
+      direction: 'Owed to me',
+    }),
+  })
+  assert.equal(mismatch.status, 409)
+  const saved = await app.request('http://localhost/tasks', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ title: extracted.title, dueISO: extracted.dueISO, confirmToken: extracted.confirmToken }),
+  })
+  assert.equal(saved.status, 200)
+  assert.equal(notion.lastDirection, 'I owe')
+  assert.equal(notion.lastPerson, null)
 })
 
 test('a non-commitment has a null title and zero confidence', async () => {
