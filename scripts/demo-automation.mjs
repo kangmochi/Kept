@@ -8,7 +8,9 @@
  * or let this script launch the simulator and kill it when finished:
  *   npm run demo:auto -- --spawn
  *
- * DEMO_INJECT="I'll send the pricing by Friday" also POSTs /inject-text to the backend.
+ * DEMO_INJECT="I'll send the pricing by Friday" POSTs /inject-text and, with --spawn,
+ * opens the glasses on that exact ?inject= URL. Without --spawn, open:
+ *   evenhub-simulator "http://localhost:5173/?inject=I'll%20send%20the%20pricing%20by%20Friday" --automation-port 9898
  * EXIT_CHECK=1 sends a root double-press after the click and logs the lit-pixel change.
  */
 
@@ -28,9 +30,12 @@ const MIN_WAIT_MS = 4000
 
 async function main() {
   const spawnSim = process.argv.includes('--spawn')
+  const injectText = process.env.DEMO_INJECT || "I'll send the pricing by Friday"
+  const injectUrl = `http://localhost:5173/?inject=${encodeURIComponent(injectText)}`
+  console.log(`glasses URL: evenhub-simulator "${injectUrl}" --automation-port 9898`)
   let child = null
   if (spawnSim) {
-    const url = process.env.KEPT_APP_URL || 'http://localhost:5173/?inject=I%27ll%20send%20the%20pricing%20by%20Friday'
+    const url = process.env.KEPT_APP_URL || injectUrl
     child = spawn('evenhub-simulator', [url, '--automation-port', '9898'], { stdio: 'inherit' })
   }
   try {

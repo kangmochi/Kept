@@ -90,15 +90,16 @@ async function discoverDataSource(token: string, databaseId: string): Promise<st
 }
 
 function unavailable(reason: string): NotionOps {
+  const fail = async () => {
+    throw new Error(reason)
+  }
   return {
-    queryOpen: async () => {
-      throw new Error(reason)
-    },
+    queryOpen: fail,
+    queryWeek: fail,
     create: async () => {
       throw new Error(reason)
     },
-    markDone: async () => {
-      throw new Error(reason)
-    },
+    setDone: fail,
+    trash: fail,
   }
 }

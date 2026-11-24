@@ -1,4 +1,4 @@
-import { dueLabel, hasDateCue, isValidISO, resolveDue } from './dates.js'
+import { dueLabel, hasDateCue, isValidISO, resolveDue, zonedISO } from './dates.js'
 import type { Extraction } from './types.js'
 
 export interface LlmClient {
@@ -37,17 +37,48 @@ export function sanitizeTitle(raw: string): string {
   return (space > 20 ? cut.slice(0, space) : cut).trim()
 }
 
+const WEEKDAY =
+  "monday|tuesday|wednesday|thursday|friday|saturday|sunday|senin|selasa|rabu|kamis|jumat|jum'?at|sabtu|minggu"
+const MONTH =
+  'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?'
+
+/** Drop calendar words from a title. Clock times such as "at 9" stay. */
+export function stripDateWords(title: string): string {
+  let text = title
+  const patterns = [
+    new RegExp(`\\b(?:by|on|before|due|this|next)(?:\\s+next)?\\s+(?:${WEEKDAY})\\b`, 'gi'),
+    new RegExp(`\\b(?:${WEEKDAY})\\s+depan\\b`, 'gi'),
+    /\b(?:end of (?:the )?month|akhir bulan|next week|minggu depan|tomorrow|besok|today|tonight|hari ini|lusa)\b/gi,
+    /\bin\s+\d+\s+(?:days?|weeks?)\b/gi,
+    /\b\d+\s+(?:hari|minggu)\s+lagi\b/gi,
+    new RegExp(`\\b(?:on\\s+)?(?:${MONTH})\\s+\\d{1,2}\\b`, 'gi'),
+    new RegExp(`\\b\\d{1,2}\\s+(?:${MONTH})\\b`, 'gi'),
+    /\b20\d{2}-\d{2}-\d{2}\b/g,
+  ]
+  for (const pattern of patterns) text = text.replace(pattern, ' ')
+  return text
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,])/g, '$1')
+    .replace(/\b(?:by|on|before|due)\b\s*$/i, '')
+    .trim()
+    .replace(/^[,.\-]+|[,.\-]+$/g, '')
+    .trim()
+}
+
 export function fallbackTitle(text: string): string {
   let title = normalizeUtterance(text)
   title = title.replace(
     /^(please\s+)?(remind me to|i'll|i will|i'm going to|im going to|aku akan|saya akan|tolong)\s+/i,
     '',
   )
-  title = title.replace(
-    /\b(by|on|before|due|this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|senin|selasa|rabu|kamis|jumat|jum'at|sabtu|minggu|tomorrow|besok|today|hari ini).*/i,
-    '',
-  )
-  return sanitizeTitle(title)
+  return sanitizeTitle(stripDateWords(title))
+}
+
+/** Prefer a title without the date. Never return an empty string. */
+export function cleanTitle(candidate: string, utterance: string): string {
+  const base = sanitizeTitle(candidate) || fallbackTitle(utterance) || sanitizeTitle(utterance)
+  const stripped = sanitizeTitle(stripDateWords(base))
+  return stripped || base || 'promise'
 }
 
 function clampConfidence(value: unknown): number {
@@ -97,9 +128,11 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
     'isCommitment is true only when the speaker promised to do something (send, call, review, remind me, I will, aku akan, saya akan).',
     'Small talk such as thanks, see you, or ok sip is not a commitment.',
     'title is a short display line, at most 40 characters, no trailing period.',
+    'Do not put the due date, weekday, or relative day in the title. Drop words such as by Friday, tomorrow, besok, Jumat depan, end of month, and in 3 days.',
+    'Keep a clock time in the title when the speaker says one, such as at 9 or jam 5.',
     'dueISO is a calendar date in that timezone. If the utterance has no date, dueISO must be null.',
-    'Never guess or invent a date. If you are unsure, use null.',
-    'Resolve by Friday, tomorrow, besok, Jumat, and next week against today.',
+    'Never guess or invent a date. Never return a date before today. If you are unsure, use null.',
+    'Resolve by Friday, tomorrow, besok, Jumat, next week, end of month, in N days, and a clock time against today.',
   ].join('\n')
 }
 
@@ -113,35 +146,24 @@ export async function extractCommitment(
   if (!utterance) throw new ExtractError('Say a promise first', 400)
 
   if (isSmallTalk(utterance)) {
-    return {
-      isCommitment: false,
-      title: sanitizeTitle(utterance).slice(0, 40),
-      dueISO: null,
-      dueLabel: '----',
-      confidence: 1,
-    }
+    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0 }
   }
 
   const raw = await llm.complete(buildExtractSystem(now, timeZone), utterance)
   const model = parseModelJson(raw)
   if (!model.isCommitment) {
-    const phrase = sanitizeTitle(model.title || utterance).slice(0, 40)
-    return {
-      isCommitment: false,
-      title: phrase || 'not a promise',
-      dueISO: null,
-      dueLabel: '----',
-      confidence: model.confidence,
-    }
+    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0 }
   }
 
-  const title = sanitizeTitle(model.title) || fallbackTitle(utterance) || 'promise'
+  const title = cleanTitle(model.title, utterance)
+  const today = zonedISO(now, timeZone)
   const localDue = resolveDue(utterance, now, timeZone)
-  let dueISO: string | null = localDue
-  if (!dueISO && model.dueISO && model.confidence >= 0.45 && hasDateCue(utterance)) {
+  let dueISO: string | null = localDue && localDue >= today ? localDue : null
+  if (!dueISO && model.dueISO && model.dueISO >= today && model.confidence >= 0.45 && hasDateCue(utterance)) {
     dueISO = model.dueISO
   }
   if (!hasDateCue(utterance)) dueISO = null
+  if (model.confidence < 0.5) dueISO = null
 
   return {
     isCommitment: true,

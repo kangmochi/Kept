@@ -8,7 +8,7 @@ export type Task = {
 
 export type Extraction = {
   isCommitment: boolean
-  title: string
+  title: string | null
   dueISO: string | null
   dueLabel: string
   confidence: number

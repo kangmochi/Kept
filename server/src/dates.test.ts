@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { addDays, dueLabel, resolveDue, upcomingWeekday, zonedISO } from './dates.js'
+import { addDays, dueLabel, endOfMonth, hasDateCue, resolveDue, upcomingWeekday, weekBounds, zonedISO } from './dates.js'
 
 const TUESDAY = new Date('2026-11-24T03:00:00.000Z')
 
@@ -35,6 +35,29 @@ test('due labels', () => {
   assert.equal(dueLabel(null, TUESDAY), '----')
   assert.equal(dueLabel('2026-11-24', TUESDAY), 'TODAY')
   assert.equal(dueLabel('2026-11-25', TUESDAY), 'TOMORROW')
-  assert.equal(dueLabel('2026-11-27', TUESDAY), 'Fri 27 Nov')
+  assert.equal(dueLabel('2026-11-27', TUESDAY), 'FRI 27 NOV')
   assert.equal(addDays('2026-11-30', 1), '2026-12-01')
+})
+
+test('end of month, offsets, and clock times in WIB', () => {
+  assert.equal(resolveDue('send it at the end of the month', TUESDAY), '2026-11-30')
+  assert.equal(resolveDue('bayar akhir bulan', TUESDAY), endOfMonth('2026-11-24'))
+  assert.equal(resolveDue('I will send it in 3 days', TUESDAY), '2026-11-27')
+  assert.equal(resolveDue('3 hari lagi aku kirim', TUESDAY), '2026-11-27')
+  assert.equal(resolveDue('2 minggu lagi', TUESDAY), '2026-12-08')
+  assert.equal(resolveDue('in 2 weeks', TUESDAY), '2026-12-08')
+  assert.equal(resolveDue('send the pricing by 5pm', TUESDAY), '2026-11-24')
+  assert.equal(resolveDue('ingatkan jam 5 sore', TUESDAY), '2026-11-24')
+  const evening = new Date('2026-11-24T11:00:00.000Z')
+  assert.equal(zonedISO(evening, 'Asia/Jakarta'), '2026-11-24')
+  assert.equal(resolveDue('by 5pm', evening), '2026-11-25')
+  assert.equal(resolveDue('jam 5 sore', evening), '2026-11-25')
+  assert.equal(hasDateCue('by 5pm'), true)
+  assert.equal(hasDateCue('akhir bulan'), true)
+  assert.equal(hasDateCue('in 3 days'), true)
+  assert.equal(hasDateCue('remind me to review the deck'), false)
+})
+
+test('the kept week is Monday through Sunday in Jakarta', () => {
+  assert.deepEqual(weekBounds(TUESDAY), { start: '2026-11-23', end: '2026-11-29' })
 })

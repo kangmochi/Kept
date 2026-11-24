@@ -41,6 +41,26 @@ export function openTasksQueryBody() {
   }
 }
 
+export function weekQueryBody(start: string, end: string) {
+  return {
+    filter: {
+      and: [
+        { property: 'Due', date: { on_or_after: start } },
+        { property: 'Due', date: { on_or_before: end } },
+      ],
+    },
+    page_size: 100,
+  }
+}
+
+export function donePageBody(done: boolean) {
+  return { properties: { Done: { checkbox: done } } }
+}
+
+export function trashPageBody() {
+  return { in_trash: true }
+}
+
 export function createPageBody(input: {
   dataSourceId: string
   title: string
@@ -181,10 +201,41 @@ export class NotionClient {
     return { notionPageId: created.id, url: created.url ?? '' }
   }
 
-  async markDone(pageId: string): Promise<void> {
+  async queryWeek(start: string, end: string): Promise<Task[]> {
+    const now = this.cfg.now?.() ?? new Date()
+    const tasks: Task[] = []
+    let cursor: string | undefined
+    for (let page = 0; page < 5; page += 1) {
+      const body = { ...weekQueryBody(start, end), start_cursor: cursor }
+      const data = (await this.request(queryOpenUrl(this.cfg.dataSourceId), {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })) as { results?: NotionPage[]; has_more?: boolean; next_cursor?: string | null }
+      for (const result of data.results ?? []) {
+        const task = pageToTask(result, now, this.cfg.timeZone)
+        if (task) tasks.push(task)
+      }
+      if (!data.has_more || !data.next_cursor) break
+      cursor = data.next_cursor
+    }
+    return tasks
+  }
+
+  async setDone(pageId: string, done: boolean): Promise<void> {
     await this.request(`https://api.notion.com/v1/pages/${encodeURIComponent(pageId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ properties: { Done: { checkbox: true } } }),
+      body: JSON.stringify(donePageBody(done)),
+    })
+  }
+
+  async markDone(pageId: string): Promise<void> {
+    await this.setDone(pageId, true)
+  }
+
+  async trash(pageId: string): Promise<void> {
+    await this.request(`https://api.notion.com/v1/pages/${encodeURIComponent(pageId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(trashPageBody()),
     })
   }
 }
