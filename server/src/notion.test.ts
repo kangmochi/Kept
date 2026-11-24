@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createPageBody, pageToTask, queryOpenUrl, schemaProblems, sortOpenTasks, sourceText } from './notion.js'
+import {
+  createPageBody,
+  donePageBody,
+  pageToTask,
+  queryOpenUrl,
+  schemaProblems,
+  sortOpenTasks,
+  sourceText,
+  trashPageBody,
+  weekQueryBody,
+} from './notion.js'
 
 test('queries the data source, not the legacy database query path', () => {
   const url = queryOpenUrl('source-id')
@@ -72,10 +82,18 @@ test('parses a page and sorts empty dates last', () => {
     now,
     'Asia/Jakarta',
   )
-  assert.equal(dated?.dueLabel, 'Fri 27 Nov')
+  assert.equal(dated?.dueLabel, 'FRI 27 NOV')
   assert.equal(open?.due, null)
   assert.deepEqual(
     sortOpenTasks([open!, dated!]).map((task) => task.id),
     ['page-a', 'page-b'],
   )
+})
+
+test('week query, done, and trash bodies match the Notion API', () => {
+  const week = weekQueryBody('2026-11-23', '2026-11-29')
+  assert.deepEqual(week.filter.and[0], { property: 'Due', date: { on_or_after: '2026-11-23' } })
+  assert.deepEqual(week.filter.and[1], { property: 'Due', date: { on_or_before: '2026-11-29' } })
+  assert.deepEqual(donePageBody(false), { properties: { Done: { checkbox: false } } })
+  assert.deepEqual(trashPageBody(), { in_trash: true })
 })

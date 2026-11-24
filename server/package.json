@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "test": "tsx --test src/dates.test.ts src/extract.test.ts src/wav.test.ts src/notion.test.ts src/http.test.ts",
+    "test": "tsx --test src/dates.test.ts src/extract.test.ts src/wav.test.ts src/notion.test.ts src/http.test.ts src/confirm.test.ts src/stt-correct.test.ts ../app/src/copy.test.ts ../app/src/asr/silence.test.ts ../app/src/similar.test.ts ../app/src/save.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -3,15 +3,20 @@ import type { Context } from 'hono'
 import { bearerToken, isLoopback, issueSession, newPairCode, readSession } from './auth.js'
 import { LastGoodCache } from './cache.js'
 import { ConfirmStore } from './confirm.js'
+import { corsHeaders } from './cors.js'
+import { weekBounds } from './dates.js'
 import { ExtractError, extractCommitment, normalizeUtterance, type LlmClient } from './extract.js'
 import type { Env } from './env.js'
+import { correctTranscript } from './stt-correct.js'
 import { ensureWav, MAX_PCM_BYTES } from './wav.js'
 import type { Extraction, Task } from './types.js'
 
 export interface NotionOps {
   queryOpen(): Promise<Task[]>
+  queryWeek(start: string, end: string): Promise<Task[]>
   create(input: { title: string; dueISO: string | null; transcript: string }): Promise<{ notionPageId: string; url: string }>
-  markDone(id: string): Promise<void>
+  setDone(id: string, done: boolean): Promise<void>
+  trash(id: string): Promise<void>
 }
 
 export type AppDeps = {
@@ -27,11 +32,9 @@ type Challenge = { expiresAt: number; sessionToken?: string }
 
 const OPEN = new Set(['/health', '/pair', '/pair/challenge', '/pair/status', '/link'])
 
-const cors: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-}
+/** A second poll inside this window does not receive the session token again. */
+const TOKEN_REVEAL_MS = 1000
+const UNDO_MS = 60_000
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (ch) => {
@@ -88,14 +91,17 @@ function linkPage(message = ''): string {
 export function createApp(deps: AppDeps) {
   const app = new Hono()
   const challenges = new Map<string, Challenge>()
+  const tokenShownAt = new Map<string, number>()
   const confirms = new ConfirmStore()
   const cache = new LastGoodCache<Extraction>()
+  const recentCreates = new Map<string, { session: string; exp: number }>()
   const now = () => deps.now?.() ?? new Date()
 
   app.use('*', async (c, next) => {
-    if (c.req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors })
+    const headers = corsHeaders(c.req.header('origin'))
+    if (c.req.method === 'OPTIONS') return new Response(null, { status: 204, headers })
     await next()
-    for (const [key, value] of Object.entries(cors)) c.res.headers.set(key, value)
+    for (const [key, value] of Object.entries(headers)) c.res.headers.set(key, value)
   })
 
   app.use('*', async (c, next) => {
@@ -123,8 +129,12 @@ export function createApp(deps: AppDeps) {
     const code = c.req.query('code')?.trim() ?? ''
     const challenge = challenges.get(code)
     if (!challenge) return c.json({ status: 'unknown' })
-    if (challenge.expiresAt < now().getTime()) return c.json({ status: 'expired' })
+    const at = now().getTime()
+    if (challenge.expiresAt <= at) return c.json({ status: 'expired' })
     if (!challenge.sessionToken) return c.json({ status: 'pending' })
+    const shown = tokenShownAt.get(code) ?? 0
+    if (shown !== 0 && at - shown < TOKEN_REVEAL_MS) return c.json({ status: 'paired' })
+    tokenShownAt.set(code, at)
     return c.json({ status: 'paired', sessionToken: challenge.sessionToken })
   })
 
@@ -159,6 +169,18 @@ export function createApp(deps: AppDeps) {
     }
   })
 
+  app.get('/stats/week', async (c) => {
+    try {
+      const bounds = weekBounds(now(), deps.env.tz)
+      const tasks = await deps.notion.queryWeek(bounds.start, bounds.end)
+      const total = tasks.length
+      const kept = tasks.filter((task) => task.done).length
+      return c.json({ kept, total, start: bounds.start, end: bounds.end })
+    } catch (err) {
+      return c.json({ error: publicError(err, 'Could not read Notion') }, 503)
+    }
+  })
+
   app.post('/listen', async (c) => {
     const length = Number(c.req.header('content-length') ?? 0)
     if (length > MAX_PCM_BYTES + 128) return c.json({ error: 'Audio is longer than 20 seconds' }, 413)
@@ -166,7 +188,7 @@ export function createApp(deps: AppDeps) {
     if (body.length === 0) return c.json({ error: 'Audio body is empty' }, 400)
     if (body.length > MAX_PCM_BYTES + 128) return c.json({ error: 'Audio is longer than 20 seconds' }, 413)
     try {
-      const text = await deps.transcribe(ensureWav(body))
+      const text = correctTranscript(await deps.transcribe(ensureWav(body)))
       return c.json({ text: text.slice(0, 2000) })
     } catch (err) {
       return c.json({ error: publicError(err, 'Transcription failed') }, 502)
@@ -200,24 +222,53 @@ export function createApp(deps: AppDeps) {
     const title = typeof body.title === 'string' ? body.title : ''
     const dueISO = typeof body.dueISO === 'string' && body.dueISO ? body.dueISO : null
     const confirmToken = typeof body.confirmToken === 'string' ? body.confirmToken : ''
-    const record = confirms.consume(confirmToken, title, dueISO, now().getTime())
-    if (!record) return c.json({ error: 'Confirm token is missing, expired, or does not match this promise' }, 409)
+    const consumed = confirms.consume(confirmToken, title, dueISO, now().getTime())
+    if (!consumed.ok) {
+      if (consumed.reason === 'expired') return c.json({ error: 'Expired. Speak again.', code: 'expired' }, 409)
+      if (consumed.reason === 'consumed') return c.json({ error: 'This promise was already saved', code: 'consumed' }, 409)
+      return c.json(
+        { error: 'Confirm token is missing, expired, or does not match this promise', code: consumed.reason },
+        409,
+      )
+    }
     try {
-      const created = await deps.notion.create({ title, dueISO, transcript: record.transcript })
+      const created = await deps.notion.create({ title, dueISO, transcript: consumed.record.transcript })
+      const at = now().getTime()
+      confirms.remember(confirmToken, at)
+      const session = bearerToken(c.req.header('authorization')) ?? ''
+      recentCreates.set(created.notionPageId, { session, exp: at + UNDO_MS })
       return c.json(created)
     } catch (err) {
+      confirms.restore(confirmToken, consumed.record, now().getTime())
       return c.json({ error: publicError(err, 'Could not save to Notion') }, 502)
     }
   })
 
   app.patch('/tasks/:id', async (c) => {
     const body = await readJson(c)
-    if (body.done !== true) return c.json({ error: 'Send done: true' }, 400)
+    if (typeof body.done !== 'boolean') return c.json({ error: 'Send done: true or done: false' }, 400)
     try {
-      await deps.notion.markDone(c.req.param('id'))
+      await deps.notion.setDone(c.req.param('id'), body.done)
       return c.json({ ok: true })
     } catch (err) {
       return c.json({ error: publicError(err, 'Could not update Notion') }, 502)
+    }
+  })
+
+  app.delete('/tasks/:id', async (c) => {
+    const id = c.req.param('id')
+    const session = bearerToken(c.req.header('authorization')) ?? ''
+    const recent = recentCreates.get(id)
+    const at = now().getTime()
+    if (!recent || recent.session !== session || recent.exp <= at) {
+      return c.json({ error: 'That promise can no longer be undone' }, 404)
+    }
+    try {
+      await deps.notion.trash(id)
+      recentCreates.delete(id)
+      return c.json({ ok: true })
+    } catch (err) {
+      return c.json({ error: publicError(err, 'Could not undo the Notion page') }, 502)
     }
   })
 
@@ -246,7 +297,7 @@ export function createApp(deps: AppDeps) {
   function seal(extraction: Extraction, transcript: string) {
     const confirmToken = confirms.issue(
       {
-        title: extraction.title,
+        title: extraction.title ?? '',
         dueISO: extraction.dueISO,
         transcript,
         isCommitment: extraction.isCommitment,

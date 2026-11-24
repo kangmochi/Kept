@@ -92,13 +92,15 @@ A dev build also tries `POST /pair` with code `dev` on startup, so the simulator
 
 ### Inject mode
 
-The confirm screen has to work with no microphone. In a dev build the phone page has a text field. Submit a sentence and the glasses show the same **SAVE THIS?** state as a successful listen. You can also open the app with a query:
+The confirm screen has to work with no microphone. In a dev build the phone page has a text field. Submit a sentence and the glasses show the same **SAVE THIS?** state as a successful listen. The exact simulator command for the Friday promise is:
 
-```text
-http://localhost:5173/?inject=I'll%20send%20the%20pricing%20by%20Friday
+```bash
+evenhub-simulator "http://localhost:5173/?inject=I'll%20send%20the%20pricing%20by%20Friday" --automation-port 9898
 ```
 
-If speech-to-text fails or hears nothing, the glasses show `COULDN'T HEAR` and the inject field stays available.
+`DEMO_INJECT` does not push text into a simulator that is already open. Pass `--spawn`, or open that URL yourself, so the click lands on **SAVE THIS?** instead of starting the microphone.
+
+If speech-to-text fails or hears nothing, the glasses show `COULDN'T HEAR` and the inject field stays available. English voices often hear the name "Budi" as "Buddy" or "Booty". Say the name once, clearly, or type it in the inject field.
 
 ### What the gestures do
 
@@ -108,7 +110,17 @@ If speech-to-text fails or hears nothing, the glasses show `COULDN'T HEAR` and t
 | Double press | System exit dialog | Back to idle | Discard | Back |
 | Swipe | Open the list | Ignored | Discard | Scroll the list, or leave MARK DONE? |
 
+After the transcript is sent, the glasses show `THINKING...` until **SAVE THIS?** or **NOT A PROMISE**. Listening also stops by itself after about 1.5 seconds of silence once speech has started. The 20 second cap is still there.
+
+**CHECK THIS?** is the same screen as **SAVE THIS?** when the model confidence is under 0.5. The due date is left blank. Press still saves. **ALREADY SAVED?** means the open list already has a similar title on the same day. Press saves another copy. Swipe discards.
+
+**SAVED to Notion** offers undo for 5 seconds (`[press] undo`, `[swipe] next`). Undo moves that page to the Notion trash. After 5 seconds the glasses return to idle. A pairing code that expires shows `Code expired. [press] new code`. A dead confirm token shows `Expired. Speak again.` and a press listens again.
+
 Double-press on the root calls `shutDownPageContainer(1)`, which is the system exit dialog. Long-press is not an exit gesture.
+
+### Known limits
+
+One utterance files one promise. A second promise in the same sentence is ignored. The open list shows at most 20 rows. Dates the model invents in the past are dropped. The idle line `2 DUE TODAY  1 LATE` and `KEPT 8/10 THIS WEEK` use Asia/Jakarta. The week is Monday through Sunday. If the week query fails, that line is hidden. If the open list cannot refresh, idle shows `offline` and keeps the last snapshot.
 
 ## Tests
 
@@ -116,7 +128,7 @@ Double-press on the root calls `shutDownPageContainer(1)`, which is the system e
 npm test
 ```
 
-The extractor tests use a fake model. They cover a Friday promise, “tomorrow” and “besok” in Asia/Jakarta, small talk with no invented date, a dateless reminder, and empty text. `npm test` does not call a live model. One optional check is skipped unless you set `LIVE_LLM=1` and `LLM_API_KEY` is in `.env`:
+The extractor tests use a fake model. They cover a Friday promise, “tomorrow” and “besok” in Asia/Jakarta, end of month, “in N days”, clock times, small talk with no invented date, a dateless reminder, title cleanup, and empty text. `npm test` does not call a live model. One optional check is skipped unless you set `LIVE_LLM=1` and `LLM_API_KEY` is in `.env`:
 
 ```bash
 LIVE_LLM=1 npm test
@@ -138,7 +150,13 @@ To launch the simulator from the script and stop it afterwards:
 npm run demo:auto -- --spawn
 ```
 
-`DEMO_INJECT="I'll send the pricing by Friday"` also posts `/inject-text` to the backend. Put the same sentence in the simulator URL (`?inject=`) if the click should land on **SAVE THIS?** rather than start the microphone. `EXIT_CHECK=1` sends a double-press after the click and logs the lit-pixel change. There is no simulator shutdown endpoint. `--spawn` kills the process it started.
+`DEMO_INJECT="I'll send the pricing by Friday"` posts `/inject-text` to the backend and, with `--spawn`, opens the glasses on that sentence. Without `--spawn`, start the simulator yourself:
+
+```bash
+evenhub-simulator "http://localhost:5173/?inject=I'll%20send%20the%20pricing%20by%20Friday" --automation-port 9898
+```
+
+`EXIT_CHECK=1` sends a double-press after the click and logs the lit-pixel change. There is no simulator shutdown endpoint. `--spawn` kills the process it started.
 
 ## Optional pack
 

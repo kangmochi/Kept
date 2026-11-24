@@ -2,10 +2,12 @@ export const API_BASE = 'http://localhost:8787'
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  code?: string
+  constructor(status: number, message: string, code?: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -20,7 +22,7 @@ export type Task = {
 export type Extraction = {
   text?: string
   isCommitment: boolean
-  title: string
+  title: string | null
   dueISO: string | null
   dueLabel: string
   confidence: number
@@ -59,7 +61,7 @@ export async function api<T>(path: string, init: RequestInitJson = {}): Promise<
   } catch {
     throw new ApiError(0, 'Server unreachable')
   }
-  const data = (await response.json().catch(() => ({}))) as { error?: string }
-  if (!response.ok) throw new ApiError(response.status, data.error || `Request failed (${response.status})`)
+  const data = (await response.json().catch(() => ({}))) as { error?: string; code?: string }
+  if (!response.ok) throw new ApiError(response.status, data.error || `Request failed (${response.status})`, data.code)
   return data as T
 }
