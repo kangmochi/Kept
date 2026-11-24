@@ -20,6 +20,11 @@ const NOT_PERSON = new Set([
   'he',
   'she',
   'they',
+  'it',
+  'this',
+  'that',
+  'there',
+  'we',
   'you',
   'kamu',
   'dia',
@@ -48,22 +53,19 @@ const NAME = String.raw`[\p{L}][\p{L}'’-]{0,40}`
 const EDGE = String.raw`(?<![\p{L}\p{N}_])`
 const END = String.raw`(?![\p{L}\p{N}_])`
 
+const PROPER = String.raw`\p{Lu}[\p{L}'’-]{0,40}`
 const OWED = [
-  new RegExp(`${EDGE}(${NAME})\\s+said\\s+(?:he|she|they)'?ll\\b`, 'iu'),
-  new RegExp(`${EDGE}(${NAME})\\s+will\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar)${END}`, 'iu'),
-  new RegExp(`${EDGE}(${NAME})\\s+(?:promised\\s+to|is\\s+going\\s+to)\\s+`, 'iu'),
-  new RegExp(`${EDGE}(${NAME})\\s+(?:bilang|berkata)${END}`, 'iu'),
+  new RegExp(`${EDGE}(${PROPER})\\s+said\\s+(?:he|she|they)'?ll\\b`, 'giu'),
+  new RegExp(`${EDGE}(${PROPER})\\s+will\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar)${END}`, 'giu'),
+  // No i flag: the name has to be capitalised, so "the meeting is going to" is not a person.
+  new RegExp(`${EDGE}(${PROPER})\\s+(?:promised\\s+to|is\\s+going\\s+to)\\s+`, 'gu'),
+  new RegExp(`${EDGE}(${PROPER})\\s+(?:bilang|berkata)${END}`, 'giu'),
 ]
 
 const SPEAKER_OWES = new RegExp(
   `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?|aku akan|saya akan|aku|saya)\\s+(?:send|pay|call|review|deliver|return|remind|kirim|bayar|telepon|menelpon)${END}`,
   'iu',
 )
-const SPEAKER_EN = new RegExp(
-  `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)${END}`,
-  'iu',
-)
-
 const PERSONAL = new RegExp(`${EDGE}(?:i need to|i have to|remind me to|jangan lupa|don't forget to)${END}`, 'iu')
 const VERB = new RegExp(
   `${EDGE}(?:send|pay|call|review|deliver|kirim|bayar|telepon|menelpon)${END}`,
@@ -164,22 +166,52 @@ function namedCounterparty(text: string): string | null {
   return best.name
 }
 
-const NOT_OBJECT = new Set(['by', 'at', 'on', 'before', 'back', 'pm', 'am', 'me'])
+const PRODUCTS = new Set(['notion', 'slack', 'zoom', 'google', 'pdf'])
 
-/** The named person the speaker is promising, when "for/to" is not used. */
+/** A capitalised person, not a product, an acronym, or a single letter. */
+function objectName(token: string | undefined): string | null {
+  if (!token || token.length < 2) return null
+  if (/^\p{Lu}+$/u.test(token)) return null
+  if (PRODUCTS.has(token.toLowerCase())) return null
+  if (!/^\p{Lu}/u.test(token)) return null
+  return cleanPerson(token)
+}
+
+/**
+ * The other person the speaker names. "for/to Nadia" still counts. Otherwise
+ * only the word directly after call, pay, remind, send, and the other person verbs.
+ */
 function speakerPerson(text: string): string | null {
   const named = namedCounterparty(text)
-  if (named) return named
+  if (named && !PRODUCTS.has(named.toLowerCase())) return named
   const match = text.match(
-    new RegExp(`${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)\\s+([\\s\\S]{0,80})`, 'iu'),
+    new RegExp(
+      `${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)\\s+(?:pay\\s+back|call|pay|remind|send|tell|email|text|message|ping|meet)\\s+(\\p{L}[\\p{L}'’-]*)`,
+      'iu',
+    ),
   )
-  if (!match?.[1]) return null
-  for (const token of match[1].split(/[^\p{L}'’-]+/u)) {
-    if (!token || NOT_OBJECT.has(token.toLowerCase()) || !/^\p{Lu}/u.test(token)) continue
-    const person = cleanPerson(token)
-    if (person) return person
+  return objectName(match?.[1])
+}
+
+function speakerLeadIndex(text: string): number {
+  const match = new RegExp(`${EDGE}(?:i'll|i will|i'm going to|im going to|i promised(?:\\s+to)?)`, 'iu').exec(text)
+  return match?.index ?? -1
+}
+
+function firstOwed(text: string): { person: string; index: number } | null {
+  let best: { person: string; index: number } | null = null
+  for (const pattern of OWED) {
+    pattern.lastIndex = 0
+    for (const match of text.matchAll(pattern)) {
+      const raw = match[1]
+      if (!raw || !/^\p{Lu}/u.test(raw)) continue
+      const person = cleanPerson(raw)
+      if (!person) continue
+      const index = match.index ?? 0
+      if (!best || index < best.index) best = { person, index }
+    }
   }
-  return null
+  return best
 }
 
 const REMIND = [
@@ -238,13 +270,16 @@ export function speakerPromises(text: string): boolean {
  * invent a person or a direction for these shapes.
  */
 export function inferParty(text: string): { person: string | null; direction: Direction | null; locked: boolean } {
-  for (const pattern of OWED) {
-    const match = text.match(pattern)
-    const person = cleanPerson(match?.[1])
-    if (person) return { person, direction: 'Owed to me', locked: true }
+  const speakerAt = speakerLeadIndex(text)
+  const owed = firstOwed(text)
+  if (owed && (speakerAt < 0 || owed.index < speakerAt)) {
+    return { person: owed.person, direction: 'Owed to me', locked: true }
   }
-  if (SPEAKER_OWES.test(text) || SPEAKER_EN.test(text)) {
-    return { person: speakerPerson(text), direction: 'I owe', locked: true }
+  if (speakerAt >= 0 || SPEAKER_OWES.test(text)) {
+    if (/\bmy own\b/i.test(text) && !namedCounterparty(text)) {
+      return { person: null, direction: null, locked: true }
+    }
+    return { person: speakerAt >= 0 ? speakerPerson(text) : namedCounterparty(text), direction: 'I owe', locked: true }
   }
   if (PERSONAL.test(text) && !namedCounterparty(text)) {
     return { person: null, direction: null, locked: true }

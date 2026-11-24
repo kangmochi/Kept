@@ -115,7 +115,8 @@ export function fallbackTitle(text: string): string {
 const INDONESIAN_UTTERANCE =
   /\b(?:aku|saya|kamu|besok|kirim|bayar|kembalikan|mengembalikan|inget|ingetin|tolong|nanti|boleh|bisa)\b/i
 const ENGLISH_SPEAKER = /\b(?:i'll|i will|i'm going to|im going to|i promised)\b/i
-const INDONESIAN_TITLE = /\b(?:jam|kembalikan|mengembalikan|kembali|bayar|inget|ingetin|besok|kirim)\b/i
+const INDONESIAN_TITLE =
+  /\b(?:jam|kembalikan|mengembalikan|kembali|bayar|inget|ingetin|besok|kirim|kirimkan|ingatkan|telepon|hubungi|mengirim|membayar|pengembalian)\b/i
 
 /** English promises stay English. An Indonesian utterance is left alone. */
 export function looksEnglish(text: string): boolean {
@@ -129,17 +130,47 @@ export function looksEnglish(text: string): boolean {
   )
 }
 
-export function indonesianLeak(title: string): boolean {
-  return INDONESIAN_TITLE.test(title)
+/** A title word counts only when the utterance itself did not already say it. */
+export function indonesianLeak(title: string, utterance = ''): boolean {
+  const spoken = new Set(utterance.toLowerCase().match(/\p{L}+/gu) ?? [])
+  for (const word of title.match(/\p{L}+/gu) ?? []) {
+    if (!INDONESIAN_TITLE.test(word) || spoken.has(word.toLowerCase())) continue
+    return true
+  }
+  return false
+}
+
+const SUBJECT_LEAD = /^(?:i'll|i will|i'm going to|im going to|i promised(?:\s+to)?)\s+/i
+const NAME_LEAD = /^(?:\p{Lu}[\p{L}'’-]{0,40}\s+)(?:promised\s+to|is\s+going\s+to|will)\s+/u
+
+function stripSubjectLead(raw: string): string {
+  let line = stripDateWords(raw)
+  for (let i = 0; i < 4; i += 1) {
+    const next = stripDateWords(line.replace(SUBJECT_LEAD, '').replace(NAME_LEAD, '')).trim()
+    if (next === line) break
+    line = next
+  }
+  return line.trim()
+}
+
+function hadSubjectLead(raw: string): boolean {
+  const line = stripDateWords(raw).trim()
+  return SUBJECT_LEAD.test(line) || NAME_LEAD.test(line)
 }
 
 /** A stable English title from the utterance, used when the model translates it. */
 export function englishPromiseTitle(text: string): string {
-  let line = normalizeUtterance(text)
-  line = line.replace(/^(?:i'll|i will|i'm going to|im going to|i promised(?:\s+to)?)\s+/i, '')
-  line = line.replace(/^(?:\p{L}[\p{L}'’-]{0,40}\s+)(?:promised\s+to|is\s+going\s+to|will)\s+/iu, '')
-  const title = sanitizeTitle(stripDateWords(line))
+  const line = stripSubjectLead(normalizeUtterance(text))
+  const title = sanitizeTitle(line)
   if (!title) return 'Promise'
+  return title.charAt(0).toUpperCase() + title.slice(1)
+}
+
+/** Drop a leading "Alex will" or "I'll" from an English model title. */
+export function presentEnglishTitle(raw: string, utterance: string): string {
+  if (!hadSubjectLead(raw)) return cleanTitle(raw, utterance)
+  const title = sanitizeTitle(stripSubjectLead(raw))
+  if (!title) return cleanTitle(raw, utterance)
   return title.charAt(0).toUpperCase() + title.slice(1)
 }
 
@@ -302,7 +333,7 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
     'direction is null for a personal task with no counterparty, such as booking your own flight or reviewing your own deck.',
     'Write the title in the same language as the utterance, even when it mixes languages. Never translate English into Indonesian or the reverse.',
     'Keep a person name in the title when the speaker said it.',
-    'isCommitment is true only when the speaker promised to do something (send, call, review, remind me, I will, aku akan, saya akan).',
+    'isCommitment is true when the speaker promised to do something (send, call, review, remind me, I will, I\'ll, aku akan, saya akan). It is also true when a named person promised to, will, or is going to do something: that commitment is owed to the speaker.',
     'A request aimed at the listener is not the speaker\'s promise. could you, can you, maybe you could, would you, bisa tolong, kamu bisa, boleh kirim, ¿puedes, puedes enviarme, podrías, quizá puedas, könntest du, tu pourrais, tu pourras, もらえますか, and 送ってもらえる are asks.',
     'Bare "puedes" or "puedas" (si no puedes, cuando puedas) is not a request. can you remind me, bisa ingetin aku, me recuerdas, erinnerst du mich, tu peux me rappeler, and 思い出させて are the speaker\'s own reminder.',
     'If the speaker also promises something in the same utterance, title is that promise, not the request. Do not drop the promise because a request is also present.',
@@ -336,11 +367,17 @@ async function recoverEnglishTitle(
     const raw = await llm.complete(strictEnglishSystem(now, timeZone), utterance)
     const again = parseModelJson(raw)
     const cleaned = cleanTitle(again.title, utterance)
-    if (again.isCommitment && cleaned && !indonesianLeak(cleaned)) return cleaned
+    if (again.isCommitment && cleaned && !indonesianLeak(cleaned, utterance)) return cleaned
   } catch {
     // The retry did not return an English title.
   }
   return englishPromiseTitle(utterance)
+}
+
+function mentionedPerson(person: string | null, text: string): string | null {
+  if (!person || !/^\p{Lu}/u.test(person)) return null
+  const escaped = person.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`${EDGE}${escaped}${END}`, 'u').test(text) ? person : null
 }
 
 export async function extractCommitment(
@@ -375,13 +412,18 @@ export async function extractCommitment(
     sourceUtterance = sentence
   }
   const owed = ask === 'owed' && !speakerPromises(utterance)
-  if (!model.isCommitment && !owed) {
+  const party = inferParty(utterance)
+  const forced = party.locked && (party.direction === 'I owe' || party.direction === 'Owed to me')
+  if (!model.isCommitment && !owed && !forced) {
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
 
   let title = cleanTitle(sourceTitle, sourceUtterance)
-  if (looksEnglish(utterance) && indonesianLeak(title)) {
-    title = await recoverEnglishTitle(utterance, llm, now, timeZone)
+  const usedPromiseSentence = sourceUtterance !== utterance
+  if (looksEnglish(utterance) && indonesianLeak(title, utterance)) {
+    title = await recoverEnglishTitle(sourceUtterance, llm, now, timeZone)
+  } else if (looksEnglish(utterance) && !usedPromiseSentence) {
+    title = presentEnglishTitle(sourceTitle, sourceUtterance)
   }
   const today = zonedISO(now, timeZone)
   const localDue = resolveDue(utterance, now, timeZone)
@@ -391,7 +433,6 @@ export async function extractCommitment(
   }
   if (!hasDateCue(utterance)) dueISO = null
   if (model.confidence < 0.5) dueISO = null
-  const party = inferParty(utterance)
 
   return {
     isCommitment: true,
@@ -399,7 +440,7 @@ export async function extractCommitment(
     dueISO,
     dueLabel: dueLabel(dueISO, now, timeZone),
     confidence: model.confidence,
-    person: party.locked ? party.person : model.person,
+    person: party.locked ? party.person : mentionedPerson(model.person, utterance),
     direction: owed ? 'Owed to me' : party.locked ? party.direction : model.direction,
   }
 }
