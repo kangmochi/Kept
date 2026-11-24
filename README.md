@@ -127,7 +127,7 @@ After the transcript is sent, the glasses show `THINKING...` until **SAVE THIS?*
 
 **CHECK THIS?** is the same screen as **SAVE THIS?** when the model confidence is under 0.5. The due date is left blank. Press still saves. **ALREADY SAVED?** means the open list already has a similar title on the same day. Press saves another copy. Swipe discards.
 
-**SAVED to Notion** offers undo for 5 seconds (`[press] undo`, `[swipe] next`). Undo moves that page to the Notion trash. After 5 seconds the glasses return to idle. A pairing code that expires shows `Code expired. [press] new code`. A dead confirm token shows `Expired. Speak again.` and a press listens again.
+**SAVED to Notion** offers undo (`[press] undo`, `[swipe] next`). Undo moves that page to the Notion trash. The on-glasses button disappears after 5 seconds. The server keeps the undo record for 60 seconds (`UNDO_MS` in `server/src/app.ts`) so a slow network does not turn a valid undo into a 404. A pairing code that expires shows `Code expired. [press] new code`. A dead confirm token shows `Expired. Speak again.` and a press listens again.
 
 Double-press on the root calls `shutDownPageContainer(1)`, which is the system exit dialog. Long-press is not an exit gesture.
 
