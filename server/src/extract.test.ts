@@ -4,6 +4,7 @@ import { loadEnvFiles, readEnv } from './env.js'
 import {
   ExtractError,
   buildExtractSystem,
+  capitalizeTitle,
   cleanTitle,
   englishPromiseTitle,
   extractCommitment,
@@ -90,7 +91,7 @@ test('a dateless reminder stays dateless even if the model invents one', async (
   assert.equal(result.isCommitment, true)
   assert.equal(result.dueISO, null)
   assert.equal(result.dueLabel, '----')
-  assert.equal(result.title, 'review the deck')
+  assert.equal(result.title, 'Review the deck')
 })
 
 test('live model extracts a Friday promise', { skip: process.env.LIVE_LLM !== '1' }, async () => {
@@ -202,7 +203,7 @@ test('titles stay in the spoken language and drop the new date words', async () 
     TUESDAY,
   )
   assert.equal(spanish.dueISO, '2026-11-25')
-  assert.equal(spanish.title, 'envío la propuesta')
+  assert.equal(spanish.title, 'Envío la propuesta')
   assert.equal(spanish.person, null)
   assert.equal(spanish.direction, null)
 
@@ -298,7 +299,7 @@ test('remind me is the speaker\'s own promise, not a request', async () => {
   assert.equal(result.direction, null)
   assert.equal(result.person, null)
   assert.equal(result.dueISO, '2026-11-25')
-  assert.equal(result.title, 'send the proposal')
+  assert.equal(result.title, 'Send the proposal')
   for (const line of [
     'could you remind me to call',
     'bisa ingetin aku besok',
@@ -332,14 +333,14 @@ test('a promise next to a request is kept, and the request itself is not filed',
       text: 'Thanks for the call. I will send the pricing to Sarah by Friday. If you still have the meeting notes, maybe you could send them sometime.',
       due: '2026-11-27',
       good: 'send the pricing to Sarah by Friday',
-      goodTitle: 'send the pricing to Sarah',
+      goodTitle: 'Send the pricing to Sarah',
       bads: ['If you still have the meeting notes,', 'send the meeting notes'],
     },
     {
       text: 'El viernes le enviaré los precios a Carlos. Si tienes las notas de la reunión, quizá puedas mandármelas.',
       due: '2026-11-27',
       good: 'enviar los precios a Carlos el viernes',
-      goodTitle: 'enviar los precios a Carlos',
+      goodTitle: 'Enviar los precios a Carlos',
       bads: ['Si tienes las notas de la reunión,', 'mandar las notas'],
     },
     {
@@ -374,14 +375,14 @@ test('a promise next to a request is kept, and the request itself is not filed',
       text: 'I will send the pricing to Sarah tomorrow. Maybe you could send the notes sometime.',
       due: '2026-11-25',
       good: 'send the pricing to Sarah tomorrow',
-      goodTitle: 'send the pricing to Sarah',
+      goodTitle: 'Send the pricing to Sarah',
       bads: ['maybe you could send the notes sometime'],
     },
     {
       text: 'Mañana le enviaré los precios a Carlos. Quizá puedas mandármelas.',
       due: '2026-11-25',
       good: 'Mañana enviar los precios a Carlos',
-      goodTitle: 'enviar los precios a Carlos',
+      goodTitle: 'Enviar los precios a Carlos',
       bads: ['quizá puedas mandármelas'],
     },
     {
@@ -409,7 +410,7 @@ test('a promise next to a request is kept, and the request itself is not filed',
       text: 'Besok aku bayar tagihan listrik ke Andi. Boleh kirim.',
       due: '2026-11-25',
       good: 'Besok bayar tagihan listrik ke Andi',
-      goodTitle: 'bayar tagihan listrik ke Andi',
+      goodTitle: 'Bayar tagihan listrik ke Andi',
       bads: ['boleh kirim'],
     },
   ]
@@ -433,7 +434,7 @@ test('a promise next to a request is kept, and the request itself is not filed',
       )
       assert.equal(filed.isCommitment, true, bad)
       assert.equal(filed.dueISO, dialog.due, bad)
-      assert.equal(filed.title, recovered, bad)
+      assert.equal(filed.title, capitalizeTitle(recovered), bad)
       assert.equal(filed.title === bad, false, bad)
     }
   }
@@ -594,7 +595,7 @@ test('english promises stay in English with a stable party', async () => {
     TUESDAY,
   )
   assert.equal(controlCalls.length, 1)
-  assert.equal(control.title, 'call Nadia')
+  assert.equal(control.title, 'Call Nadia')
   assert.equal(control.person, 'Nadia')
   assert.equal(control.direction, 'I owe')
   assert.equal(control.dueISO, '2026-11-25')
@@ -612,7 +613,7 @@ test('english promises stay in English with a stable party', async () => {
     TUESDAY,
   )
   assert.equal(retriedCalls.length, 2)
-  assert.equal(retried.title, 'call Nadia at 5pm')
+  assert.equal(retried.title, 'Call Nadia at 5pm')
   assert.equal(retried.person, 'Nadia')
   assert.equal(retried.direction, 'I owe')
   assert.equal(retried.dueISO, '2026-11-25')
@@ -780,7 +781,7 @@ test('english party rules ignore ordinary words and products', async () => {
   )
   assert.equal(booked.person, null)
   assert.equal(booked.direction, null)
-  assert.equal(booked.title, 'book my own flight')
+  assert.equal(booked.title, 'Book my own flight')
 
   const normalised = await extractCommitment(
     'Alex will send the samples by Friday',
@@ -929,6 +930,27 @@ test('a bare I will is not forced into a promise', async () => {
     assert.equal(empty.isCommitment, false, line)
     assert.equal(empty.title, null, line)
   }
+})
+
+test('every saved title starts with an uppercase letter', async () => {
+  const rows = [
+    { text: "I'll send pricing to Nadia by Friday", title: 'send pricing to Nadia', expect: 'Send pricing to Nadia' },
+    { text: "I'll confirm the courier booking", title: 'confirm courier booking', expect: 'Confirm courier booking' },
+    { text: 'Jumat aku akan kirim sampel ke Budi', title: 'kirim sampel ke Budi', expect: 'Kirim sampel ke Budi' },
+    { text: "I'll send pricing to Nadia", title: '"send pricing to Nadia"', expect: 'Send pricing to Nadia' },
+  ]
+  for (const row of rows) {
+    const result = await extractCommitment(
+      row.text,
+      fake({ isCommitment: true, title: row.title, dueISO: null, confidence: 0.9 }),
+      TUESDAY,
+    )
+    assert.equal(result.title, row.expect, row.title)
+    assert.equal(result.title?.slice(1), row.expect.slice(1), row.title)
+  }
+  assert.equal(capitalizeTitle('"send pricing to Nadia"'), '"Send pricing to Nadia"')
+  assert.equal(capitalizeTitle('envío la propuesta'), 'Envío la propuesta')
+  assert.equal(capitalizeTitle('提案を送る'), '提案を送る')
 })
 
 test('empty text is a safe error and does not call the model', async () => {

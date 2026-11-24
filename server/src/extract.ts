@@ -29,6 +29,17 @@ export function normalizeUtterance(text: string): string {
   return text.trim().replace(/\s+/g, ' ')
 }
 
+/** Uppercase the first letter. Leading quotes and punctuation stay put. */
+export function capitalizeTitle(title: string): string {
+  const chars = [...title]
+  for (let i = 0; i < chars.length; i += 1) {
+    if (!/\p{L}/u.test(chars[i])) continue
+    chars[i] = chars[i].toUpperCase()
+    return chars.join('')
+  }
+  return title
+}
+
 export function sanitizeTitle(raw: string): string {
   let title = raw.trim().replace(/^["']+|["']+$/g, '')
   title = title.replace(/[.!]+$/g, '').replace(/\s+/g, ' ').trim()
@@ -446,7 +457,7 @@ export async function extractCommitment(
 
   return {
     isCommitment: true,
-    title,
+    title: capitalizeTitle(title),
     dueISO,
     dueLabel: dueLabel(dueISO, now, timeZone),
     confidence: model.confidence,
