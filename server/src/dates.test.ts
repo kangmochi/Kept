@@ -58,6 +58,64 @@ test('end of month, offsets, and clock times in WIB', () => {
   assert.equal(hasDateCue('remind me to review the deck'), false)
 })
 
+test('Spanish, German, French, and Japanese dates resolve in WIB', () => {
+  const tomorrow = '2026-11-25'
+  const friday = '2026-11-27'
+  const nextWeek = '2026-12-01'
+  const monthEnd = '2026-11-30'
+  const inThreeDays = '2026-11-27'
+  const today = '2026-11-24'
+  for (const phrase of ['mañana', 'manana', 'morgen', 'demain', '明日']) {
+    assert.equal(resolveDue(phrase, TUESDAY), tomorrow, phrase)
+    assert.equal(hasDateCue(phrase), true, phrase)
+  }
+  assert.equal(resolveDue('el próximo viernes', TUESDAY), friday)
+  assert.equal(resolveDue('el proximo viernes', TUESDAY), friday)
+  assert.equal(resolveDue('el viernes que viene', TUESDAY), friday)
+  assert.equal(resolveDue('nächsten Freitag', TUESDAY), friday)
+  assert.equal(resolveDue('vendredi prochain', TUESDAY), friday)
+  assert.equal(resolveDue('金曜日', TUESDAY), friday)
+  assert.equal(resolveDue('来週の金曜日', TUESDAY), '2026-12-04')
+  assert.equal(resolveDue('la próxima semana', TUESDAY), nextWeek)
+  assert.equal(resolveDue('la semana que viene', TUESDAY), nextWeek)
+  assert.equal(resolveDue('nächste Woche', TUESDAY), nextWeek)
+  assert.equal(resolveDue('la semaine prochaine', TUESDAY), nextWeek)
+  assert.equal(resolveDue('来週', TUESDAY), nextWeek)
+  assert.equal(resolveDue('fin de mes', TUESDAY), monthEnd)
+  assert.equal(resolveDue('a finales de mes', TUESDAY), monthEnd)
+  assert.equal(resolveDue('Ende des Monats', TUESDAY), monthEnd)
+  assert.equal(resolveDue('Monatsende', TUESDAY), monthEnd)
+  assert.equal(resolveDue('fin du mois', TUESDAY), monthEnd)
+  assert.equal(resolveDue('月末', TUESDAY), monthEnd)
+  assert.equal(resolveDue('en 3 días', TUESDAY), inThreeDays)
+  assert.equal(resolveDue('en 3 dias', TUESDAY), inThreeDays)
+  assert.equal(resolveDue('in 3 Tagen', TUESDAY), inThreeDays)
+  assert.equal(resolveDue('dans 3 jours', TUESDAY), inThreeDays)
+  assert.equal(resolveDue('3日後', TUESDAY), inThreeDays)
+  assert.equal(resolveDue('en 2 semanas', TUESDAY), '2026-12-08')
+  assert.equal(resolveDue('in 2 Wochen', TUESDAY), '2026-12-08')
+  assert.equal(resolveDue('dans 2 semaines', TUESDAY), '2026-12-08')
+  assert.equal(resolveDue('2週間後', TUESDAY), '2026-12-08')
+  assert.equal(resolveDue('a las 17', TUESDAY), today)
+  assert.equal(resolveDue('a las 5 de la tarde', TUESDAY), today)
+  assert.equal(resolveDue('um 17 Uhr', TUESDAY), today)
+  assert.equal(resolveDue('um 17:00', TUESDAY), today)
+  assert.equal(resolveDue('à 17h', TUESDAY), today)
+  assert.equal(resolveDue('a 17h', TUESDAY), today)
+  assert.equal(resolveDue('17時', TUESDAY), today)
+  assert.equal(resolveDue('午後5時', TUESDAY), today)
+  const beforeFive = new Date('2026-11-23T21:00:00.000Z')
+  assert.equal(resolveDue('a las 5', beforeFive), today)
+  assert.equal(resolveDue('a las 5 de la mañana', beforeFive), today)
+  assert.equal(resolveDue('5時', beforeFive), today)
+  assert.equal(resolveDue('a las 5', TUESDAY), tomorrow)
+  assert.equal(hasDateCue('María'), false)
+  assert.equal(hasDateCue('Maria'), false)
+  assert.equal(hasDateCue('月'), false)
+  assert.equal(resolveDue('María', TUESDAY), null)
+  assert.equal(resolveDue('on 3 March', TUESDAY), '2027-03-03')
+})
+
 test('the kept week is Monday through Sunday in Jakarta', () => {
   assert.deepEqual(weekBounds(TUESDAY), { start: '2026-11-23', end: '2026-11-29' })
 })

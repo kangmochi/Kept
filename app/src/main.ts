@@ -17,7 +17,7 @@ import {
   errorText,
   idleCopy,
   listHeader,
-  listItem,
+  promiseList,
   listeningCopy,
   markCopy,
   notPromiseCopy,
@@ -74,6 +74,7 @@ let weekStats: { kept: number; total: number } | null = null
 let idleOffline = false
 let saveInFlight = false
 let markIndex = -1
+let rowTasks: (Task | null)[] = []
 let errorKind: ErrorKind = 'tasks'
 let pairCode = ''
 let secondsLeft = 20
@@ -502,14 +503,13 @@ async function showList() {
     return
   }
   if (tasks.length === 0) {
+    rowTasks = []
     await paint('list', emptyListCopy())
     return
   }
-  await paint(
-    'list',
-    listHeader(),
-    tasks.map((task) => listItem(task.title, task.dueLabel)),
-  )
+  const listed = promiseList(tasks)
+  rowTasks = listed.tasks
+  await paint('list', listHeader(), listed.rows)
 }
 
 async function confirmDone() {
@@ -669,9 +669,12 @@ async function handleGesture(type: OsEventTypeList, index?: number) {
       await showIdle()
       return
     }
-    if (typeof index !== 'number' || index < 0 || index >= tasks.length) return
-    markIndex = index
-    await paint('mark', markCopy(tasks[index]))
+    if (typeof index !== 'number' || index < 0 || index >= rowTasks.length) return
+    const picked = rowTasks[index]
+    if (!picked) return
+    markIndex = tasks.findIndex((task) => task.id === picked.id)
+    if (markIndex < 0) return
+    await paint('mark', markCopy(picked))
     return
   }
   if (screen === 'mark') {

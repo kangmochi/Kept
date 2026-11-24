@@ -1,4 +1,4 @@
-import type { Extraction, Task } from './api'
+import type { Direction, Extraction, Task } from './api'
 
 export function clip(text: string, max = 28): string {
   const clean = text.replace(/\s+/g, ' ').trim()
@@ -62,7 +62,12 @@ export function idleCopy(
   if (opts.week && opts.week.total > 0) {
     lines.push(`KEPT ${opts.week.kept}/${opts.week.total} THIS WEEK`)
   }
-  if (next) {
+  const debt = mostUrgentDebt(tasks)
+  if (debt) {
+    const label = debt.dueLabel || '----'
+    lines.push(debt.person ? `I OWE ${debt.person.toUpperCase()} · ${label}` : `I OWE · ${label}`)
+    lines.push(`"${clip(debt.title)}"`)
+  } else if (next) {
     lines.push(`next due: ${next.dueLabel || '----'}`)
     lines.push(`"${clip(next.title)}"`)
   } else {
@@ -89,17 +94,65 @@ export function thinkingCopy(): string {
   return 'THINKING...'
 }
 
+export function relationLine(person: string | null | undefined, direction: Direction | null | undefined): string | null {
+  if (direction !== 'I owe' && direction !== 'Owed to me') return null
+  const label = direction === 'I owe' ? 'I OWE' : 'OWED TO ME'
+  if (person && person.trim()) return `FOR ${person.trim().toUpperCase()} · ${label}`
+  return label
+}
+
 export function confirmCopy(extraction: Extraction): string {
-  return [
-    'SAVE THIS?',
-    clip(extraction.title || 'promise'),
-    `DUE  ${extraction.dueLabel || '----'}`,
-    '[press] SAVE  [swipe] DISCARD',
-  ].join('\n')
+  const lines = ['SAVE THIS?', clip(extraction.title || 'promise'), `DUE  ${extraction.dueLabel || '----'}`]
+  const relation = relationLine(extraction.person, extraction.direction)
+  if (relation) lines.push(relation)
+  lines.push('[press] SAVE  [swipe] DISCARD')
+  return lines.join('\n')
 }
 
 export function checkCopy(extraction: Extraction): string {
-  return ['CHECK THIS?', clip(extraction.title || 'promise'), 'DUE  ----', '[press] SAVE  [swipe] DISCARD'].join('\n')
+  const lines = ['CHECK THIS?', clip(extraction.title || 'promise'), 'DUE  ----']
+  const relation = relationLine(extraction.person, extraction.direction)
+  if (relation) lines.push(relation)
+  lines.push('[press] SAVE  [swipe] DISCARD')
+  return lines.join('\n')
+}
+
+function byDue(tasks: Task[]): Task[] {
+  return [...tasks].sort((a, b) => {
+    if (a.due && b.due) return a.due < b.due ? -1 : a.due > b.due ? 1 : 0
+    if (a.due) return -1
+    if (b.due) return 1
+    return a.title.localeCompare(b.title)
+  })
+}
+
+export function mostUrgentDebt(tasks: Task[]): Task | null {
+  const debts = byDue(tasks.filter((task) => task.direction === 'I owe'))
+  return debts[0] ?? null
+}
+
+/** Section headers plus at most 20 task rows. A null entry is a header. */
+export function promiseList(tasks: Task[]): { rows: string[]; tasks: (Task | null)[] } {
+  const groups = [
+    { label: 'I OWE', items: byDue(tasks.filter((task) => task.direction === 'I owe')) },
+    { label: 'OWED TO ME', items: byDue(tasks.filter((task) => task.direction === 'Owed to me')) },
+    { label: 'OTHER', items: byDue(tasks.filter((task) => task.direction == null)) },
+  ]
+  const rows: string[] = []
+  const mapped: (Task | null)[] = []
+  let slots = 20
+  for (const group of groups) {
+    if (group.items.length === 0 || slots <= 0) continue
+    rows.push(`${group.label} · ${group.items.length}`)
+    mapped.push(null)
+    for (const task of group.items) {
+      if (slots <= 0) break
+      rows.push(listItem(task.title, task.dueLabel))
+      mapped.push(task)
+      slots -= 1
+    }
+  }
+  return { rows, tasks: mapped }
 }
 
 export function alreadyCopy(title: string): string {

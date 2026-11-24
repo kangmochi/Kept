@@ -1,10 +1,13 @@
 import { randomBytes } from 'node:crypto'
+import type { Direction } from './types.js'
 
 export type ConfirmRecord = {
   title: string
   dueISO: string | null
   transcript: string
   isCommitment: boolean
+  person: string | null
+  direction: Direction | null
   exp: number
 }
 

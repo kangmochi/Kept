@@ -1,5 +1,6 @@
 import { dueLabel, hasDateCue, isValidISO, resolveDue, zonedISO } from './dates.js'
-import type { Extraction } from './types.js'
+import { cleanDirection, cleanPerson, inferParty } from './party.js'
+import type { Direction, Extraction } from './types.js'
 
 export interface LlmClient {
   complete(system: string, user: string): Promise<string>
@@ -42,17 +43,45 @@ const WEEKDAY =
 const MONTH =
   'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?'
 
+const EDGE = String.raw`(?<![\p{L}\p{N}_])`
+const END = String.raw`(?![\p{L}\p{N}_])`
+const FOREIGN_DAY =
+  'domingo|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|sonntag|montag|dienstag|mittwoch|donnerstag|freitag|samstag|dimanche|lundi|mardi|mercredi|jeudi|vendredi|samedi'
+const JA_WEEKDAY = '日曜日|月曜日|火曜日|水曜日|木曜日|金曜日|土曜日'
+
 /** Drop calendar words from a title. Clock times such as "at 9" stay. */
 export function stripDateWords(title: string): string {
   let text = title
+    .replace(new RegExp(`来週の(?:${JA_WEEKDAY})`, 'g'), ' ')
+    .replace(new RegExp(JA_WEEKDAY, 'g'), ' ')
+    .replace(/明日|来週|月末/g, ' ')
+    .replace(/\d+週間後|\d+日後/g, ' ')
   const patterns = [
-    new RegExp(`\\b(?:by|on|before|due|this|next)(?:\\s+next)?\\s+(?:${WEEKDAY})\\b`, 'gi'),
-    new RegExp(`\\b(?:${WEEKDAY})\\s+depan\\b`, 'gi'),
-    /\b(?:end of (?:the )?month|akhir bulan|next week|minggu depan|tomorrow|besok|today|tonight|hari ini|lusa)\b/gi,
-    /\bin\s+\d+\s+(?:days?|weeks?)\b/gi,
-    /\b\d+\s+(?:hari|minggu)\s+lagi\b/gi,
-    new RegExp(`\\b(?:on\\s+)?(?:${MONTH})\\s+\\d{1,2}\\b`, 'gi'),
-    new RegExp(`\\b\\d{1,2}\\s+(?:${MONTH})\\b`, 'gi'),
+    new RegExp(`${EDGE}(?:el\\s+)?pr[oó]xim[oa]\\s+(?:${FOREIGN_DAY})${END}`, 'giu'),
+    new RegExp(`${EDGE}(?:${FOREIGN_DAY})\\s+que\\s+viene${END}`, 'giu'),
+    new RegExp(
+      `${EDGE}(?:nächsten|nächste|nächster|naechsten|naechste|naechster)\\s+(?:${FOREIGN_DAY})${END}`,
+      'giu',
+    ),
+    new RegExp(`${EDGE}(?:${FOREIGN_DAY})\\s+prochain${END}`, 'giu'),
+    new RegExp(
+      `${EDGE}(?:la\\s+pr[oó]xima\\s+semana|la\\s+semana\\s+que\\s+viene|nächste\\s+woche|naechste\\s+woche|la\\s+semaine\\s+prochaine|fin\\s+de\\s+mes|a\\s+finales\\s+de\\s+mes|ende\\s+des\\s+monats|monatsende|fin\\s+du\\s+mois|mañana|manana|morgen|demain)${END}`,
+      'giu',
+    ),
+    new RegExp(`${EDGE}en\\s+\\d+\\s+(?:d[ií]as|semanas)${END}`, 'giu'),
+    new RegExp(`${EDGE}in\\s+\\d+\\s+(?:tagen|wochen)${END}`, 'giu'),
+    new RegExp(`${EDGE}dans\\s+\\d+\\s+(?:jours|semaines)${END}`, 'giu'),
+    new RegExp(`${EDGE}(?:by|on|before|due|this|next)(?:\\s+next)?\\s+(?:${WEEKDAY})${END}`, 'giu'),
+    new RegExp(`${EDGE}(?:${WEEKDAY})\\s+depan${END}`, 'giu'),
+    new RegExp(
+      `${EDGE}(?:end of (?:the )?month|akhir bulan|next week|minggu depan|tomorrow|besok|today|tonight|hari ini|lusa)${END}`,
+      'giu',
+    ),
+    new RegExp(`${EDGE}in\\s+\\d+\\s+(?:days?|weeks?)${END}`, 'giu'),
+    new RegExp(`${EDGE}\\d+\\s+(?:hari|minggu)\\s+lagi${END}`, 'giu'),
+    new RegExp(`${EDGE}(?:on\\s+)?(?:${MONTH})\\s+\\d{1,2}${END}`, 'giu'),
+    new RegExp(`${EDGE}\\d{1,2}\\s+(?:${MONTH})${END}`, 'giu'),
+    new RegExp(`${EDGE}(?:${WEEKDAY}|${FOREIGN_DAY})${END}`, 'giu'),
     /\b20\d{2}-\d{2}-\d{2}\b/g,
   ]
   for (const pattern of patterns) text = text.replace(pattern, ' ')
@@ -92,6 +121,8 @@ function parseModelJson(raw: string): {
   title: string
   dueISO: string | null
   confidence: number
+  person: string | null
+  direction: Direction | null
 } {
   const start = raw.indexOf('{')
   const end = raw.lastIndexOf('}')
@@ -109,6 +140,8 @@ function parseModelJson(raw: string): {
     title: typeof parsed.title === 'string' ? parsed.title : '',
     dueISO: due && isValidISO(due) ? due : null,
     confidence: clampConfidence(parsed.confidence),
+    person: cleanPerson(typeof parsed.person === 'string' ? parsed.person : null),
+    direction: cleanDirection(parsed.direction),
   }
 }
 
@@ -122,9 +155,14 @@ export function buildExtractSystem(now: Date, timeZone: string): string {
   }).format(now)
   return [
     'You extract one spoken commitment for a glasses app.',
-    'The speaker may use English or Indonesian.',
+    'The speaker may use English, Indonesian, Spanish, German, French, or Japanese.',
     `Today is ${today}. The timezone is ${timeZone}.`,
-    'Return only a JSON object with keys isCommitment (boolean), title (string), dueISO (YYYY-MM-DD or null), confidence (number from 0 to 1).',
+    'Return only a JSON object with keys isCommitment (boolean), title (string), dueISO (YYYY-MM-DD or null), confidence (number from 0 to 1), person (string or null), direction ("I owe", "Owed to me", or null).',
+    'person is the other named person, never I, me, aku, or saya. Use null when nobody else is named.',
+    'direction is "I owe" when the speaker promises to send, pay, review, call, or deliver for someone else, even if that person is unnamed.',
+    'direction is "Owed to me" when someone else promised the speaker.',
+    'direction is null for a personal task with no counterparty, such as booking your own flight or reviewing your own deck.',
+    'Keep the title in the utterance language. Do not translate it. Keep a person name in the title when the speaker said it.',
     'isCommitment is true only when the speaker promised to do something (send, call, review, remind me, I will, aku akan, saya akan).',
     'Small talk such as thanks, see you, or ok sip is not a commitment.',
     'title is a short display line, at most 40 characters, no trailing period.',
@@ -145,14 +183,15 @@ export async function extractCommitment(
   const utterance = normalizeUtterance(text)
   if (!utterance) throw new ExtractError('Say a promise first', 400)
 
+  const blank = { person: null, direction: null } as const
   if (isSmallTalk(utterance)) {
-    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0 }
+    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
 
   const raw = await llm.complete(buildExtractSystem(now, timeZone), utterance)
   const model = parseModelJson(raw)
   if (!model.isCommitment) {
-    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0 }
+    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
 
   const title = cleanTitle(model.title, utterance)
@@ -164,6 +203,7 @@ export async function extractCommitment(
   }
   if (!hasDateCue(utterance)) dueISO = null
   if (model.confidence < 0.5) dueISO = null
+  const party = inferParty(utterance)
 
   return {
     isCommitment: true,
@@ -171,5 +211,7 @@ export async function extractCommitment(
     dueISO,
     dueLabel: dueLabel(dueISO, now, timeZone),
     confidence: model.confidence,
+    person: party.locked ? party.person : model.person,
+    direction: party.locked ? party.direction : model.direction,
   }
 }

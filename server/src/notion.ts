@@ -1,5 +1,5 @@
 import { dueLabel } from './dates.js'
-import type { Task } from './types.js'
+import type { Direction, Task } from './types.js'
 
 export const NOTION_VERSION = '2026-03-11'
 
@@ -17,6 +17,7 @@ type NotionProperty = {
   rich_text?: { plain_text?: string }[]
   date?: { start?: string | null } | null
   checkbox?: boolean
+  select?: { name?: string | null } | null
 }
 
 type NotionPage = {
@@ -66,6 +67,8 @@ export function createPageBody(input: {
   title: string
   dueISO: string | null
   transcript: string
+  person?: string | null
+  direction?: Direction | null
 }) {
   const properties: Record<string, unknown> = {
     Name: { title: [{ type: 'text', text: { content: input.title } }] },
@@ -75,6 +78,12 @@ export function createPageBody(input: {
     },
   }
   if (input.dueISO) properties.Due = { date: { start: input.dueISO } }
+  if (input.person) {
+    properties.Person = { rich_text: [{ type: 'text', text: { content: input.person } }] }
+  }
+  if (input.direction === 'I owe' || input.direction === 'Owed to me') {
+    properties.Direction = { select: { name: input.direction } }
+  }
   return {
     parent: { type: 'data_source_id', data_source_id: input.dataSourceId },
     properties,
@@ -97,12 +106,17 @@ export function pageToTask(page: NotionPage, now: Date, timeZone: string): Task 
   const title = plain(props.Name?.title) || 'untitled'
   const start = props.Due?.date?.start ?? null
   const due = start && /^\d{4}-\d{2}-\d{2}/.test(start) ? start.slice(0, 10) : null
+  const person = plain(props.Person?.rich_text) || null
+  const selectName = props.Direction?.select?.name
+  const direction: Direction | null = selectName === 'I owe' || selectName === 'Owed to me' ? selectName : null
   return {
     id: page.id,
     title,
     due,
     dueLabel: dueLabel(due, now, timeZone),
     done: props.Done?.checkbox === true,
+    person,
+    direction,
   }
 }
 
@@ -185,7 +199,13 @@ export class NotionClient {
     return sortOpenTasks(tasks)
   }
 
-  async create(input: { title: string; dueISO: string | null; transcript: string }): Promise<{ notionPageId: string; url: string }> {
+  async create(input: {
+    title: string
+    dueISO: string | null
+    transcript: string
+    person?: string | null
+    direction?: Direction | null
+  }): Promise<{ notionPageId: string; url: string }> {
     const created = (await this.request('https://api.notion.com/v1/pages', {
       method: 'POST',
       body: JSON.stringify(
@@ -194,6 +214,8 @@ export class NotionClient {
           title: input.title,
           dueISO: input.dueISO,
           transcript: input.transcript,
+          person: input.person,
+          direction: input.direction,
         }),
       ),
     })) as { id?: string; url?: string }

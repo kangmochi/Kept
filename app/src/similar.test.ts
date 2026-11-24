@@ -4,8 +4,8 @@ import { findDuplicate, tokenOverlap } from './similar.ts'
 import type { Extraction, Task } from './api.ts'
 
 const open: Task[] = [
-  { id: 'page-1', title: 'send pricing', due: '2026-11-27', dueLabel: 'FRI 27 NOV', done: false },
-  { id: 'page-2', title: 'call the bank', due: null, dueLabel: '----', done: false },
+  { id: 'page-1', title: 'send pricing', due: '2026-11-27', dueLabel: 'FRI 27 NOV', done: false, person: null, direction: 'I owe' },
+  { id: 'page-2', title: 'call the bank', due: null, dueLabel: '----', done: false, person: null, direction: null },
 ]
 
 function extraction(title: string, dueISO: string | null): Extraction {
@@ -16,6 +16,8 @@ function extraction(title: string, dueISO: string | null): Extraction {
     dueLabel: dueISO ? 'FRI 27 NOV' : '----',
     confidence: 0.9,
     confirmToken: 'token',
+    person: null,
+    direction: null,
   }
 }
 
