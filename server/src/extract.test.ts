@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { loadEnvFiles, readEnv } from './env.js'
-import { ExtractError, cleanTitle, extractCommitment, type LlmClient } from './extract.js'
-import { listenerAsk } from './party.js'
+import { ExtractError, cleanTitle, extractCommitment, fallbackTitle, promiseSentence, type LlmClient } from './extract.js'
+import { listenerAsk, speakerPromises } from './party.js'
 import { createLlmClient } from './providers.js'
 
 const TUESDAY = new Date('2026-11-24T03:00:00.000Z')
@@ -320,88 +320,88 @@ test('a bare puedes is not an ask, and the dialog request lines are not filed', 
 test('a promise next to a request is kept, and the request itself is not filed', async () => {
   const dialogs = [
     {
-      text: 'Thanks for the call. I will send the pricing to Sarah by Friday. If you happen to have those meeting notes, maybe you could send them sometime.',
+      text: 'Thanks for the call. I will send the pricing to Sarah by Friday. If you still have the meeting notes, maybe you could send them sometime.',
       due: '2026-11-27',
       good: 'send the pricing to Sarah by Friday',
       goodTitle: 'send the pricing to Sarah',
-      bad: 'maybe you could send them sometime',
+      bads: ['If you still have the meeting notes,', 'send the meeting notes'],
     },
     {
-      text: 'El viernes le enviaré los precios a Carlos. Quizá puedas mandármelas si no puedes.',
+      text: 'El viernes le enviaré los precios a Carlos. Si tienes las notas de la reunión, quizá puedas mandármelas.',
       due: '2026-11-27',
       good: 'enviar los precios a Carlos el viernes',
       goodTitle: 'enviar los precios a Carlos',
-      bad: 'quizá puedas mandármelas',
+      bads: ['Si tienes las notas de la reunión,', 'mandar las notas'],
     },
     {
-      text: 'Ich schicke Lukas die Preise bis Ende des Monats. Könntest du sie mir irgendwann schicken?',
+      text: 'Ich schicke Lukas die Preise bis Ende des Monats. Wenn du die Notizen noch hast, könntest du sie mir irgendwann schicken?',
       due: '2026-11-30',
       good: 'Preise an Lukas schicken bis Ende des Monats',
       goodTitle: 'Preise an Lukas schicken',
-      bad: 'Könntest du sie mir irgendwann schicken',
+      bads: ['Wenn du die Notizen noch hast, könntest', 'Notizen schicken'],
     },
     {
-      text: "La semaine prochaine, j'enverrai les tarifs à Julien. Tu pourras me les envoyer.",
+      text: "La semaine prochaine, j'enverrai les tarifs à Julien. Si tu as encore les notes de la réunion, tu pourras me les envoyer.",
       due: '2026-12-01',
       good: 'Envoyer les tarifs à Julien la semaine prochaine',
       goodTitle: 'Envoyer les tarifs à Julien',
-      bad: 'tu pourras me les envoyer',
+      bads: ['Si tu as encore les notes de la', 'envoyer les notes'],
     },
     {
-      text: '今月末までに、田中さんに見積もりを送ります。送ってもらえると助かります。',
+      text: '今月末までに、田中さんに見積もりを送ります。会議のメモが残っていたら、いつか送ってもらえると助かります。',
       due: '2026-11-30',
       good: '今月末までに田中さんに見積もりを送ります',
       goodTitle: '田中さんに見積もりを送ります',
-      bad: '送ってもらえると助かります',
+      bads: ['会議のメモが残っていたら いつか送ってもらえると助かります', 'メモを送る'],
     },
     {
-      text: 'Akhir bulan aku bayar tagihan listrik ke Andi. Boleh kirim kapan-kapan.',
+      text: 'Akhir bulan aku bayar tagihan listrik ke Andi. Kalau kamu masih simpan catatan rapat, boleh kirim kapan-kapan.',
       due: '2026-11-30',
       good: 'Akhir bulan Bayar tagihan listrik ke Andi',
       goodTitle: 'Bayar tagihan listrik ke Andi',
-      bad: 'boleh kirim kapan-kapan',
+      bads: ['Kalau kamu masih simpan catatan', 'Kirim catatan rapat'],
     },
     {
       text: 'I will send the pricing to Sarah tomorrow. Maybe you could send the notes sometime.',
       due: '2026-11-25',
       good: 'send the pricing to Sarah tomorrow',
       goodTitle: 'send the pricing to Sarah',
-      bad: 'maybe you could send the notes sometime',
+      bads: ['maybe you could send the notes sometime'],
     },
     {
       text: 'Mañana le enviaré los precios a Carlos. Quizá puedas mandármelas.',
       due: '2026-11-25',
       good: 'Mañana enviar los precios a Carlos',
       goodTitle: 'enviar los precios a Carlos',
-      bad: 'quizá puedas mandármelas',
+      bads: ['quizá puedas mandármelas'],
     },
     {
       text: 'Ich schicke Lukas die Preise morgen. Könntest du sie mir schicken?',
       due: '2026-11-25',
       good: 'Preise an Lukas schicken morgen',
       goodTitle: 'Preise an Lukas schicken',
-      bad: 'Könntest du sie mir schicken',
+      bads: ['Könntest du sie mir schicken'],
     },
     {
       text: "Demain j'enverrai les tarifs à Julien. Tu pourras me les envoyer.",
       due: '2026-11-25',
       good: 'Envoyer les tarifs à Julien demain',
       goodTitle: 'Envoyer les tarifs à Julien',
-      bad: 'tu pourras me les envoyer',
+      bads: ['tu pourras me les envoyer'],
     },
     {
       text: '明日、田中さんに見積もりを送ります。送ってもらえると助かります。',
       due: '2026-11-25',
       good: '明日田中さんに見積もりを送ります',
       goodTitle: '田中さんに見積もりを送ります',
-      bad: '送ってもらえると助かります',
+      bads: ['送ってもらえると助かります'],
     },
     {
       text: 'Besok aku bayar tagihan listrik ke Andi. Boleh kirim.',
       due: '2026-11-25',
       good: 'Besok bayar tagihan listrik ke Andi',
       goodTitle: 'bayar tagihan listrik ke Andi',
-      bad: 'boleh kirim',
+      bads: ['boleh kirim'],
     },
   ]
   for (const dialog of dialogs) {
@@ -415,15 +415,62 @@ test('a promise next to a request is kept, and the request itself is not filed',
     assert.equal(kept.title, dialog.goodTitle, dialog.text)
     assert.equal((kept.title ?? '').length > 0, true, dialog.text)
 
-    const filed = await extractCommitment(
-      dialog.text,
-      fake({ isCommitment: true, title: dialog.bad, dueISO: dialog.due, confidence: 0.9, direction: 'I owe' }),
-      TUESDAY,
-    )
-    assert.equal(filed.isCommitment, false, dialog.bad)
-    assert.equal(filed.title, null, dialog.bad)
-    assert.equal(filed.direction, null, dialog.bad)
+    const recovered = fallbackTitle(promiseSentence(dialog.text) ?? '')
+    for (const bad of dialog.bads) {
+      const filed = await extractCommitment(
+        dialog.text,
+        fake({ isCommitment: true, title: bad, dueISO: dialog.due, confidence: 0.9, direction: 'I owe' }),
+        TUESDAY,
+      )
+      assert.equal(filed.isCommitment, true, bad)
+      assert.equal(filed.dueISO, dialog.due, bad)
+      assert.equal(filed.title, recovered, bad)
+      assert.equal(filed.title === bad, false, bad)
+    }
   }
+})
+
+test('german verb-second order is still the speaker promise', async () => {
+  const first = await extractCommitment(
+    'Morgen schicke ich den Vorschlag an Anna. Könntest du mir die Notizen schicken?',
+    fake({ isCommitment: true, title: 'den Vorschlag an Anna schicken', dueISO: null, confidence: 0.9 }),
+    TUESDAY,
+  )
+  assert.equal(first.isCommitment, true)
+  assert.equal(first.dueISO, '2026-11-25')
+  assert.match(first.title ?? '', /Vorschlag/)
+  assert.doesNotMatch(first.title ?? '', /Notizen/)
+
+  const second = await extractCommitment(
+    'Dann sende ich die Datei morgen. Könntest du das prüfen?',
+    fake({ isCommitment: true, title: 'die Datei senden', dueISO: null, confidence: 0.9 }),
+    TUESDAY,
+  )
+  assert.equal(second.isCommitment, true)
+  assert.equal(second.dueISO, '2026-11-25')
+  assert.match(second.title ?? '', /Datei/)
+  assert.doesNotMatch(second.title ?? '', /prüfen|prufen/)
+})
+
+test('casual phrases are not speaker promises', () => {
+  for (const line of [
+    'je vais bien',
+    'voy a comer',
+    'voy a casa',
+    'Ich werde müde',
+    'よろしくお願いします',
+    '失礼します',
+    'お疲れ様です',
+  ]) {
+    assert.equal(speakerPromises(line), false, line)
+  }
+  assert.equal(speakerPromises('voy a enviar el informe'), true)
+  assert.equal(speakerPromises('je vais envoyer les tarifs'), true)
+  assert.equal(speakerPromises('Ich werde die Datei senden'), true)
+  assert.equal(speakerPromises('Morgen schicke ich den Vorschlag'), true)
+  assert.equal(speakerPromises('Dann sende ich die Datei'), true)
+  assert.equal(speakerPromises('Morgen rufe ich Anna an'), true)
+  assert.equal(speakerPromises('見積もりを送ります'), true)
 })
 
 test('empty text is a safe error and does not call the model', async () => {

@@ -1,5 +1,5 @@
 import { dueLabel, hasDateCue, isValidISO, resolveDue, zonedISO } from './dates.js'
-import { askClause, cleanDirection, cleanPerson, inferParty, listenerAsk, speakerPromises } from './party.js'
+import { cleanDirection, cleanPerson, inferParty, listenerAsk, speakerPromises } from './party.js'
 import type { Direction, Extraction } from './types.js'
 
 export interface LlmClient {
@@ -122,17 +122,93 @@ function fold(text: string): string {
     .trim()
 }
 
+const CONTENT_STOP = new Set([
+  'the', 'a', 'an', 'to', 'for', 'of', 'and', 'or', 'you', 'your', 'me', 'my', 'i', 'we', 'they', 'them', 'it',
+  'that', 'this', 'those', 'these', 'if', 'still', 'have', 'has', 'had', 'maybe', 'could', 'would', 'can',
+  'please', 'sometime', 'some', 'them', 'du', 'die', 'der', 'das', 'und', 'mir', 'sie', 'noch', 'hast', 'wenn',
+  'dir', 'den', 'dem', 'ein', 'eine', 'ich', 'si', 'las', 'los', 'el', 'la', 'de', 'del', 'que', 'un', 'una',
+  'tu', 'les', 'des', 'en', 'au', 'aux', 'encore', 'as', 'moi', 'lui', 'kamu', 'kalau', 'masih', 'yang', 'dan',
+  'di', 'ke', 'ini', 'itu', 'ada', 'bisa', 'tolong', 'boleh', 'will', 'aku', 'saya', 'je', 'con', 'por', 'para',
+  'tienes', 'konntest', 'sometime',
+])
+
+const VERB_PREFIXES = [
+  'send', 'schick', 'envoy', 'envi', 'mand', 'kirim', 'bayar', 'pagar', 'llam', 'call', 'deliver', 'entreg',
+  'review', 'revis', 'ruf', 'bezahl', 'mach', 'pay', 'appel', 'livr', 'remind',
+]
+
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?。？])\s*/u)
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+function isConditionalClause(sentence: string): boolean {
+  const line = fold(sentence)
+  return /^(if you|si tienes|si tu as|wenn du|kalau kamu)\b/.test(line) || sentence.includes('たら')
+}
+
+/** Speaker-promise sentence, skipping the ask and a conditional clause that only introduces it. */
+export function promiseSentence(text: string): string | null {
+  const parts = splitSentences(text)
+  const request = new Set<number>()
+  parts.forEach((part, index) => {
+    if (listenerAsk(part) === 'none') return
+    request.add(index)
+    if (index > 0 && isConditionalClause(parts[index - 1])) request.add(index - 1)
+  })
+  return parts.find((part, index) => !request.has(index) && speakerPromises(part)) ?? null
+}
+
+function requestText(text: string): string {
+  const parts = splitSentences(text)
+  const chunks: string[] = []
+  parts.forEach((part, index) => {
+    if (listenerAsk(part) === 'none') return
+    if (index > 0 && isConditionalClause(parts[index - 1])) chunks.push(parts[index - 1])
+    chunks.push(part)
+  })
+  return chunks.join(' ')
+}
+
+function latinTokens(text: string): string[] {
+  return fold(stripDateWords(text))
+    .split(' ')
+    .filter((word) => word.length > 2 && !CONTENT_STOP.has(word) && !VERB_PREFIXES.some((prefix) => word.startsWith(prefix)))
+}
+
+function jaGrams(text: string): string[] {
+  const core = text.replace(/[\s、。！？をはがにのへともでや]/g, '')
+  const grams: string[] = []
+  for (let i = 0; i < core.length - 1; i += 1) grams.push(core.slice(i, i + 2))
+  return grams
+}
+
+function overlapScore(title: string, sentence: string): number {
+  if (/[\u3040-\u30ff\u4e00-\u9fff]/.test(title)) {
+    const hay = sentence.replace(/[\s、。！？をはがにのへともでや]/g, '')
+    return jaGrams(title).filter((gram) => hay.includes(gram)).length
+  }
+  const words = new Set(latinTokens(sentence))
+  const hay = fold(sentence)
+  return latinTokens(title).filter((token) => words.has(token) || hay.includes(token)).length
+}
+
 /**
- * True when the model title is the listener's request rather than the speaker's promise.
- * A shared verb is not enough: the title has to sit in the ask sentence and not in the rest.
+ * True when the title is about the listener's request more than the speaker's promise.
+ * Content words are folded and stripped of stopwords and verb stems. Japanese uses character bigrams.
  */
 export function titleMatchesRequest(title: string, utterance: string): boolean {
-  const clause = askClause(utterance)
-  if (!clause) return false
-  const normTitle = fold(stripDateWords(title))
-  if (normTitle.length < 2) return false
-  const promiseSide = fold(utterance.replace(clause, ' '))
-  return fold(clause).includes(normTitle) && !promiseSide.includes(normTitle)
+  if (!title.trim() || listenerAsk(utterance) === 'none') return false
+  if (listenerAsk(title) === 'ask') return true
+  const request = requestText(utterance)
+  if (!request) return false
+  const requestScore = overlapScore(title, request)
+  if (requestScore === 0) return false
+  const promise = promiseSentence(utterance)
+  const promiseScore = promise ? overlapScore(title, promise) : 0
+  return requestScore > promiseScore
 }
 
 /** Prefer a title without the date. Strip the date before the 40-character cut. Never return an empty string. */
@@ -231,15 +307,22 @@ export async function extractCommitment(
   if (ask === 'ask' && !promised) {
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
+  let sourceTitle = model.title
+  let sourceUtterance = utterance
   if (ask === 'ask' && titleMatchesRequest(model.title, utterance)) {
-    return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
+    const sentence = promiseSentence(utterance)
+    if (!sentence) {
+      return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
+    }
+    sourceTitle = sentence
+    sourceUtterance = sentence
   }
   const owed = ask === 'owed' && !speakerPromises(utterance)
   if (!model.isCommitment && !owed) {
     return { isCommitment: false, title: null, dueISO: null, dueLabel: '----', confidence: 0, ...blank }
   }
 
-  const title = cleanTitle(model.title, utterance)
+  const title = cleanTitle(sourceTitle, sourceUtterance)
   const today = zonedISO(now, timeZone)
   const localDue = resolveDue(utterance, now, timeZone)
   let dueISO: string | null = localDue && localDue >= today ? localDue : null

@@ -78,13 +78,15 @@ const JA_ASKS = ['送ってもらえる', 'もらえますか']
 const EXTRA_SPEAKER = new RegExp(
   [
     `${EDGE}(?:enviar[eé]|mandar[eé])${END}`,
-    `${EDGE}voy\\s+a(?:\\s+\\p{L}+)?${END}`,
-    `${EDGE}ich\\s+(?:schicke|werde|sende)${END}`,
+    `${EDGE}voy\\s+a\\s+(?:enviar|mandar|pagar|llamar|entregar|revisar)\\p{L}*`,
+    `${EDGE}ich\\s+(?:schicke|sende|mache|bezahle)${END}`,
+    `${EDGE}(?:schicke|sende|mache|bezahle)\\s+ich${END}`,
+    `${EDGE}rufe\\s+ich\\b[^.?!。？]{0,80}\\ban${END}`,
+    `${EDGE}(?:ich\\s+werde|werde\\s+ich)\\b[^.?!。？]{0,80}\\b(?:schicken|senden|machen|bezahlen|anrufen|rufen|schicke|sende)`,
     `${EDGE}j['’]enverrai${END}`,
     `${EDGE}je\\s+vous\\s+enverrai${END}`,
-    `${EDGE}je\\s+vais${END}`,
+    `${EDGE}je\\s+vais\\s+(?:envoyer|payer|appeler|livrer|revoir|finir)\\p{L}*`,
     '送ります',
-    'します',
     'やります',
   ].join('|'),
   'iu',
@@ -197,8 +199,15 @@ export function listenerAsk(text: string): 'ask' | 'owed' | 'none' {
   return AGREES.test(text) ? 'owed' : 'ask'
 }
 
+/** します counts only when a real verb precedes it, not a set farewell. */
+function japaneseSpeakerPromise(text: string): boolean {
+  if (/送ります|やります|払います|届けます|かけます/.test(text)) return true
+  const rest = text.replace(/お願いします/g, '').replace(/失礼します/g, '')
+  return rest.includes('します')
+}
+
 export function speakerPromises(text: string): boolean {
-  return SPEAKER_OWES.test(text) || EXTRA_SPEAKER.test(text)
+  return SPEAKER_OWES.test(text) || EXTRA_SPEAKER.test(text) || japaneseSpeakerPromise(text)
 }
 
 /**
