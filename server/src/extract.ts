@@ -124,7 +124,7 @@ export function fallbackTitle(text: string): string {
 }
 
 const INDONESIAN_UTTERANCE =
-  /\b(?:aku|saya|kamu|gue|gw|dia|kasih|balas|ya|nih|dong|deh|sih|besok|kirim|bayar|kembalikan|mengembalikan|inget|ingetin|tolong|nanti|boleh|bisa)\b/i
+  /\b(?:aku|saya|kamu|gue|gw|dia|kasih|balas|nih|dong|deh|sih|besok|kirim|bayar|kembalikan|mengembalikan|inget|ingetin|tolong|nanti|boleh|bisa)\b/i
 const ENGLISH_SPEAKER = /\b(?:i'll|i will|i'm going to|im going to|i promised)\b/i
 const INDONESIAN_TITLE =
   /\b(?:jam|kembalikan|mengembalikan|kembali|bayar|inget|ingetin|besok|kirim|kirimkan|ingatkan|telepon|telpon|hubungi|mengirim|membayar|pengembalian|selesaikan|perbaiki|siapkan|buatkan|ambil|cek|tanyakan|jemput|antar|lunasi|balas)\b/i

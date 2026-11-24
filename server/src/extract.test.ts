@@ -996,6 +996,14 @@ test('an owed english promise keeps an english title when the model translates i
   assert.equal(looksEnglish('Nadia will balas it'), false)
   assert.equal(looksEnglish('Dia will kasih ke me'), false)
   assert.equal(looksEnglish('Gue will transfer it ya'), false)
+
+  const callYa = await extractCommitment(
+    "I'll call ya tomorrow",
+    fake({ isCommitment: true, title: 'Telepon kamu', dueISO: null, confidence: 0.9, direction: 'I owe', person: null }),
+    TUESDAY,
+  )
+  assert.equal(callYa.title, 'Call ya')
+  assert.equal(/telepon|kamu|kirim/i.test(callYa.title ?? ''), false)
   assert.equal(indonesianLeak('Selesaikan invoice', 'tolong selesaikan invoice'), false)
   assert.equal(indonesianLeak('Selesaikan invoice', 'Alex will settle the invoice by Friday'), true)
 })
